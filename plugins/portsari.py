@@ -40,6 +40,8 @@ CONTEXT_LINES = 300
 ALERT_GAP = 900
 REASON_MAX = 120
 BARK_URL = os.getenv('PORTSARI_BARK_URL')  # https://bark.example/<device key>, optional
+BARK_SOUND = os.getenv('PORTSARI_BARK_SOUND', 'bloom')  # A Bark built-in sound or the name of one uploaded in the app
+BARK_VOLUME = os.getenv('PORTSARI_BARK_VOLUME', '3')  # Critical alert volume, 0-10 in Bark
 
 STRIKES_FILE = os.path.expanduser('~/portsari/strikes.json')
 STRIKE_DAYS = 30
@@ -222,8 +224,8 @@ def critical_alert(clock, nicks):
 
     state['last_alert'] = time.time()
     try:
-        # ponytail: path form from the Bark README, untested until bark-server is up
-        requests.get('%s/Portsari/%s' % (BARK_URL, quote(format_alert(clock, nicks))), params={'level': 'critical'}, timeout=15)
+        params = {'level': 'critical', 'sound': BARK_SOUND, 'volume': BARK_VOLUME}
+        requests.get('%s/Portsari/%s' % (BARK_URL, quote(format_alert(clock, nicks))), params=params, timeout=15)
     except Exception as e:
         LOGGER.error('[PORTSARI] Alert failed: %s' % e)
 
