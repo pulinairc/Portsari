@@ -1,0 +1,14 @@
+[Unit]
+Description=portsari, #pulina moderation lookout
+After=network.target
+
+[Service]
+User=rolle
+WorkingDirectory=/home/rolle/portsari
+EnvironmentFile=/home/rolle/portsari/.env
+ExecStart=/home/rolle/.pyenv/versions/sopel-8-env/bin/sopel start -c /home/rolle/portsari/portsari.cfg
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
