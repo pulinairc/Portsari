@@ -14,7 +14,7 @@ The doorman of #pulina. It judges the channel against [the rules](https://www.pu
 
 Ops and half-ops are off limits: Portsari never judges, reports or kicks them. It never kicks bots either, and needs op itself to act. Claude's text reaches the channel only as the warning or kick reason: one line, at most 120 characters, email addresses removed.
 
-## Install on botit
+## Install on IRC bot server
 
 1. Install Claude Code for `rolle`: `curl -fsSL https://claude.ai/install.sh | bash`
 2. On a machine logged in to the Claude subscription, run `claude setup-token` and put the token in `/home/rolle/portsari/.env` as `CLAUDE_CODE_OAUTH_TOKEN` (see `.env.example`).
