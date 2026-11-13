@@ -1,6 +1,6 @@
 # Portsari
 
-The doorman of #pulina. It judges the channel against [the rules](https://www.pulina.fi/saannot), and when it decides a break calls for action, escalates per person: warning, kick, knockout (kick + 5 min ban), then a permanent ban. Strikes are kept by host in `strikes.json` and forgotten after 30 days. It also tells every op in a short private message what it did, when and why, and sends the owner private notes about harmful things and bad vibes that are not rule breaks. It never answers anyone.
+The doorman of #pulina. It judges the channel against [the rules](https://www.pulina.fi/saannot), and when it decides a break calls for action, escalates per person: warning, kick, knockout (kick + 5 min ban), then a permanent ban. Strikes are kept by host in `strikes.json` and forgotten after 30 days. It also tells every op in a short private message what it did, when and why, and sends private notes about harmful things and bad vibes that are not rule breaks to a short list of readers, each checked by nick and exact ident@host before every message. It never answers anyone.
 
 ```
 #pulina ──> Portsari (Sopel, botit.pulina.fi)
@@ -9,7 +9,7 @@ The doorman of #pulina. It judges the channel against [the rules](https://www.pu
              │     rules page + new lines ──> claude -p (reads only the channel logs since 2008, empty home, fixed JSON answer)
              │     act or not + Finnish message ──> next step on the ladder, then private message to every op
              │     high ──> also a critical alert
-             │     notes ──> private message to the owner + notes.log, no alert, no action, never about ops
+             │     notes ──> private message to the verified readers + notes.log, no alert, no action, never about ops
              └─ private messages to Portsari: never read
 ```
 

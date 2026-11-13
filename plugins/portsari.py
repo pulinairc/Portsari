@@ -54,7 +54,13 @@ STRIKES_FILE = os.path.expanduser('~/portsari/strikes.json')
 STATE_FILE = os.path.expanduser('~/portsari/state.json')  # How far the day log has been judged
 NOTES_FILE = os.path.expanduser('~/portsari/notes.log')  # Private observations for the owner
 ACTIONS_FILE = os.path.expanduser('~/portsari/actions.log')  # Every report sent to the ops
-OWNER = 'rolle'  # Gets the private notes
+# Who gets the private notes: a nick and the exact ident@host it must be using right now. The idents carry no
+# "~", so the shell host's identd vouches for them and only that Unix user can have them. Someone else on the
+# nick, or the right person on another address, gets nothing; notes.log keeps every note either way.
+NOTE_READERS = (
+    ('rolle', 'rolle@pulina.fi'),
+    ('mustikkasoppa', 'mustikkaso@pulina.fi'),
+)
 SLUR_CHECK_DELAY = 20  # Seconds before an early check, so irssi has written the line to the day log
 # An IRC line is 512 bytes with the sender's address in front, the same limit Lobby keeps (core/src/irc.rs).
 # Sopel's say() measures that per recipient and splits longer text between words, so a private message
@@ -394,8 +400,14 @@ def format_note(note):
     return 'Muistiinpano %s%s: %s' % (note['time'], nicks, clean(note['note'], TEXT_MAX))
 
 
+def verified_reader(bot, nick, mask):
+    """True only when the nick is on IRC right now with exactly the expected ident@host."""
+    user = bot.users.get(bot.make_identifier(nick))
+    return bool(user and user.user and user.host) and f'{user.user}@{user.host}'.lower() == mask.lower()
+
+
 def tell_owner(bot, note):
-    """A private note: kept in notes.log and sent only to the owner. Never about an op, never an alert."""
+    """A private note: kept in notes.log and sent only to the verified note readers. Never about an op, never an alert."""
     if any(is_op(bot, n) and not is_bot(bot, n) for n in note['nicks']) or not note['note'].strip():
         return
     key = ','.join(sorted(n.lower() for n in note['nicks']))
@@ -404,7 +416,9 @@ def tell_owner(bot, note):
     noted[key] = time.time()
     text = format_note(note)
     append_line(NOTES_FILE, text)
-    bot.say(text, OWNER, max_messages=MESSAGE_PARTS)
+    for nick, mask in NOTE_READERS:
+        if verified_reader(bot, nick, mask):
+            bot.say(text, nick, max_messages=MESSAGE_PARTS)
 
 
 def act(bot, nick, message):
@@ -594,22 +608,32 @@ if __name__ == '__main__':
     assert act(fake, 'nobody', 'x') == (NONE, 'ei ole enää kanavalla')
 
     fake.said.clear()
+    # rolle is who the list says; the one on mustikkasoppa is an impostor with the wrong ident and host
+    fake.users = {'rolle': SimpleNamespace(user='rolle', host='pulina.fi'),
+                  'mustikkasoppa': SimpleNamespace(user='~mustikkaso', host='evil.example')}
     tell_owner(fake, {'time': '02:15', 'nicks': ['oppi'], 'note': 'opista'})
     tell_owner(fake, {'time': '02:15', 'nicks': ['kaveri'], 'note': ' '})
     tell_owner(fake, {'time': '02:16', 'nicks': ['kummitus_'], 'note': 'kummitus vastasi englanniksi'})
     tell_owner(fake, {'time': '02:17', 'nicks': [], 'note': 'Tunnelma kiristyy'})
-    assert fake.said == [(OWNER, 'Muistiinpano 02:16 (kummitus_): kummitus vastasi englanniksi'),
-                         (OWNER, 'Muistiinpano 02:17: Tunnelma kiristyy')], fake.said
+    assert fake.said == [('rolle', 'Muistiinpano 02:16 (kummitus_): kummitus vastasi englanniksi'),
+                         ('rolle', 'Muistiinpano 02:17: Tunnelma kiristyy')], fake.said
     with open(NOTES_FILE, encoding='utf-8') as f:
         assert f.read().count('Muistiinpano') == 2
     tell_owner(fake, {'time': '02:30', 'nicks': ['Kummitus_'], 'note': 'sama asia uudestaan'})
     assert len(fake.said) == 2, fake.said
+    fake.users['mustikkasoppa'] = SimpleNamespace(user='mustikkaso', host='PULINA.fi')
+    del fake.users['rolle']
+    tell_owner(fake, {'time': '02:40', 'nicks': ['kaveri'], 'note': 'uusi asia'})
+    assert fake.said[2:] == [('mustikkasoppa', 'Muistiinpano 02:40 (kaveri): uusi asia')], fake.said
+    assert not verified_reader(fake, 'rolle', 'rolle@pulina.fi')
+    fake.said = fake.said[:2]
     today = date.today().isoformat()
     append_line(ACTIONS_FILE, '02:20 varoitus hiippari (sääntö 15): n-sana')
     with open(NOTES_FILE, 'a', encoding='utf-8') as f:
         f.write('1999-01-01 Muistiinpano vanha\n')
     assert sent_today(today) == ['Muistiinpano 02:16 (kummitus_): kummitus vastasi englanniksi',
                                  'Muistiinpano 02:17: Tunnelma kiristyy',
+                                 'Muistiinpano 02:40 (kaveri): uusi asia',
                                  '02:20 varoitus hiippari (sääntö 15): n-sana'], sent_today(today)
 
     started = []
