@@ -1,3 +1,7 @@
+### 1.1.1: 2026-11-13
+
+* Fix repeating the same notes every round
+
 ### 1.1.0: 2026-11-13
 
 * Add private notes about harmful vibes

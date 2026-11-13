@@ -57,6 +57,8 @@ ACTIONS_FILE = os.path.expanduser('~/portsari/actions.log')  # Every report sent
 OWNER = 'rolle'  # Gets the private notes
 SLUR_CHECK_DELAY = 20  # Seconds before an early check, so irssi has written the line to the day log
 NOTE_MAX = 200
+NOTE_REPEAT_SECONDS = 3600  # A second note about the same people within this is dropped
+SENT_LINES = 40  # How many of today's sent notes and reports Claude sees, so it does not repeat them
 STRIKE_DAYS = 30
 
 HIGH = 'high'
@@ -161,6 +163,8 @@ Write one when you notice something harmful or a bad vibe that is not a clear ru
 someone talked down to, ganged up on or left out, a newcomer treated coldly, someone who seems low, lonely or unwell,
 hints of drug use or heavy drinking, kummitus answering badly, or a pattern you found while looking back in the logs.
 Most of the time there is nothing to note: leave notes empty. Never write notes about operators.
+You are given what was already sent today. Never repeat it or restate an ongoing situation: a note or a report
+must be about something new in the new lines, such as a clear turn for the worse, a new person or a new kind of problem.
 Finnish, under 200 characters each, at most three per run.
 
 Judge only the lines after the marker "--- NEW LINES ---". Earlier lines are context, already judged.
@@ -183,6 +187,7 @@ RULES:
 rules_cache = {'text': None, 'at': 0}
 state = {'last_alert': 0}
 unbans = []
+noted = {}  # Nicks of a note -> when the last one about them was sent
 progress_lock = threading.Lock()
 
 
@@ -232,6 +237,14 @@ def append_line(path, text):
             f.write('%s %s\n' % (date.today().isoformat(), text))
     except OSError as e:
         LOGGER.error('[PORTSARI] Writing %s failed: %s' % (path, e))
+
+
+def sent_today(today):
+    """Today's notes and reports, newest last, so Claude knows what it already said."""
+    lines = []
+    for path in (NOTES_FILE, ACTIONS_FILE):
+        lines += [line.split(' ', 1)[1] for line in read_lines(path) if line.startswith(today + ' ')]
+    return lines[-SENT_LINES:]
 
 
 def load_strikes():
@@ -286,11 +299,14 @@ def fetch_rules():
     return rules_cache['text']
 
 
-def build_input(context, new):
-    return 'Earlier lines (context):\n%s\n\n--- NEW LINES ---\n%s\n' % ('\n'.join(context) or '(none)', '\n'.join(new))
+def build_input(context, new, sent=()):
+    text = 'Earlier lines (context):\n%s\n\n--- NEW LINES ---\n%s\n' % ('\n'.join(context) or '(none)', '\n'.join(new))
+    if sent:
+        text += '\nAlready sent today, do not repeat:\n%s\n' % '\n'.join(sent)
+    return text
 
 
-def judge(context, new, rules):
+def judge(context, new, rules, sent=()):
     # dontAsk denies every tool use not allowed here: only reading the two log folders
     allowed = ['%s(/%s/**)' % (tool, folder) for tool in ('Read', 'Grep', 'Glob') for folder in READABLE]
     cmd = [CLAUDE, '-p', '--model', MODEL, '--effort', EFFORT, '--tools', 'Read,Grep,Glob',
@@ -299,7 +315,7 @@ def judge(context, new, rules):
            '--json-schema', json.dumps(SCHEMA), '--system-prompt', SYSTEM % (DAY_LOGS, MONTH_LOGS, rules)]
     env = dict(os.environ, HOME=CLAUDE_HOME)
     os.makedirs(CLAUDE_WORK, exist_ok=True)
-    done = subprocess.run(cmd, input=build_input(context, new), capture_output=True, encoding='utf-8',
+    done = subprocess.run(cmd, input=build_input(context, new, sent), capture_output=True, encoding='utf-8',
                           timeout=CLAUDE_TIMEOUT, env=env, cwd=CLAUDE_WORK)
     result = json.loads(done.stdout)
     if result.get('is_error') or 'structured_output' not in result:
@@ -373,6 +389,10 @@ def tell_owner(bot, note):
     """A private note: kept in notes.log and sent only to the owner. Never about an op, never an alert."""
     if any(is_op(bot, n) and not is_bot(bot, n) for n in note['nicks']) or not note['note'].strip():
         return
+    key = ','.join(sorted(n.lower() for n in note['nicks']))
+    if time.time() - noted.get(key, 0) < NOTE_REPEAT_SECONDS:
+        return
+    noted[key] = time.time()
     text = format_note(note)
     append_line(NOTES_FILE, text)
     bot.say(text, OWNER)
@@ -474,7 +494,7 @@ def run_check(bot):
         return
 
     try:
-        incidents, notes = judge(context, new, rules)
+        incidents, notes = judge(context, new, rules, sent_today(following['day']))
     except Exception as e:
         # ponytail: a failed run is retried from the same line next time; stays stuck if Claude keeps failing
         LOGGER.error('[PORTSARI] Judging failed: %s' % e)
@@ -492,6 +512,7 @@ def run_check(bot):
 if __name__ == '__main__':
     assert number_rules('<p>a</p><ol><li>x</li><li>y</li></ol>') == 'a\n1. x\n2. y'
     assert build_input(['1', '2'], ['3']) == 'Earlier lines (context):\n1\n2\n\n--- NEW LINES ---\n3\n'
+    assert build_input([], ['1'], ['Muistiinpano 04:13 (x): y']).endswith('Already sent today, do not repeat:\nMuistiinpano 04:13 (x): y\n')
     assert spoke_in(['21:51 < hiippari> x', '21:52 <@oppi> y', '21:53  * kaveri hymyilee', '21:54 -!- z has joined']) == {'hiippari', 'oppi', 'kaveri'}
     for hit in ('neekeri :D', 'NEEKERI', 'neekereille', 'n33keri', 'nekru', 'hintti', 'mamut', 'matujen', 'rättipää',
                 'ryssät', 'nigga', 'niggers', 'faggot', 'sieg heil', 'Heil Hitler', '14/88', 'retarded'):
@@ -569,6 +590,15 @@ if __name__ == '__main__':
                          (OWNER, 'Muistiinpano 02:17: Tunnelma kiristyy')], fake.said
     with open(NOTES_FILE, encoding='utf-8') as f:
         assert f.read().count('Muistiinpano') == 2
+    tell_owner(fake, {'time': '02:30', 'nicks': ['Kummitus_'], 'note': 'sama asia uudestaan'})
+    assert len(fake.said) == 2, fake.said
+    today = date.today().isoformat()
+    append_line(ACTIONS_FILE, '02:20 varoitus hiippari (sääntö 15): n-sana')
+    with open(NOTES_FILE, 'a', encoding='utf-8') as f:
+        f.write('1999-01-01 Muistiinpano vanha\n')
+    assert sent_today(today) == ['Muistiinpano 02:16 (kummitus_): kummitus vastasi englanniksi',
+                                 'Muistiinpano 02:17: Tunnelma kiristyy',
+                                 '02:20 varoitus hiippari (sääntö 15): n-sana'], sent_today(today)
 
     started = []
 
