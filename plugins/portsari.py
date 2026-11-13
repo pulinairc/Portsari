@@ -569,4 +569,19 @@ if __name__ == '__main__':
                          (OWNER, 'Muistiinpano 02:17: Tunnelma kiristyy')], fake.said
     with open(NOTES_FILE, encoding='utf-8') as f:
         assert f.read().count('Muistiinpano') == 2
+
+    started = []
+
+    class FakeTimer:
+        def __init__(self, delay, func, args):
+            started.append((delay, func, args))
+
+        def start(self):
+            pass
+
+    threading.Timer = FakeTimer
+    collect(fake, SimpleNamespace(sender=CHANNEL, nick='hiippari', plain='olet neekeri :D'))
+    collect(fake, SimpleNamespace(sender=CHANNEL, nick='oppi', plain='olet neekeri :D'))
+    collect(fake, SimpleNamespace(sender=CHANNEL, nick='hiippari', plain='hyvää huomenta'))
+    assert started == [(SLUR_CHECK_DELAY, patrol, (fake,))], started
     print('Portsari self-check ok')
