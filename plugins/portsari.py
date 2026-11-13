@@ -1,9 +1,10 @@
 """Portsari: the doorman of #pulina. Judges the channel against its rules, kicks when needed and tells the ops.
 Never answers anyone.
 
-Claude judges the channel against https://www.pulina.fi/saannot through the Claude Code CLI,
-with no tools and an empty home, so all it can see is the public rules and the public channel.
-Its words reach the channel only as a short, cleaned kick reason.
+Claude judges the channel against https://www.pulina.fi/saannot through the Claude Code CLI. It reads the
+channel's own log files, so a restart loses nothing, and may look back through the public logs since 2008.
+It can read those log folders and nothing else, runs in an empty home, and its words reach the channel
+only as a short, cleaned warning or kick reason.
 """
 
 import html
@@ -11,9 +12,9 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
-from collections import deque
-from datetime import datetime
+from datetime import date, datetime
 from urllib.parse import quote
 
 import requests
@@ -30,6 +31,10 @@ RULES_TTL = 24 * 3600
 
 CLAUDE = os.path.expanduser('~/.local/bin/claude')
 CLAUDE_HOME = os.path.expanduser('~/portsari/claude-home')  # Empty: no CLAUDE.md, memory, settings or MCP servers
+CLAUDE_WORK = os.path.join(CLAUDE_HOME, 'work')  # Empty working folder, so nothing is readable by default
+DAY_LOGS = os.path.expanduser('~/pulina.fi/pulina-days')  # pul-YYYY-MM-DD.log since 2016, written live by irssi
+MONTH_LOGS = os.path.expanduser('~/pulina.fi/pul')  # pulina-YYYY-MM.log since 2008
+READABLE = (DAY_LOGS, MONTH_LOGS)
 MODEL = 'opus'
 EFFORT = 'high'
 CLAUDE_TIMEOUT = 600
@@ -37,7 +42,7 @@ CLAUDE_TIMEOUT = 600
 JUDGE_SECONDS = 600
 UNBAN_CHECK_SECONDS = 30
 KNOCKOUT_SECONDS = 300  # The rules: knockout = kick + 5 min ban
-CONTEXT_LINES = 300
+CONTEXT_LINES = 150
 ALERT_GAP = 900
 REASON_MAX = 120
 BARK_URL = os.getenv('PORTSARI_BARK_URL')  # https://bark.example/<device key>, optional
@@ -46,8 +51,8 @@ BARK_VOLUME = os.getenv('PORTSARI_BARK_VOLUME', '3')  # Critical alert volume, 0
 BARK_SOUND_URL = os.getenv('PORTSARI_BARK_SOUND_URL')  # A .caf the phone downloads and caches, optional
 
 STRIKES_FILE = os.path.expanduser('~/portsari/strikes.json')
+STATE_FILE = os.path.expanduser('~/portsari/state.json')  # How far the day log has been judged
 STRIKE_DAYS = 30
-ACTED_MARK = ' [Portsari acted on this line]'
 
 HIGH = 'high'
 MID = 'mid'
@@ -65,7 +70,7 @@ SLUR_REASON = 'Ei rasismia, slurreja eikä vihapuhetta (sääntö 15)'
 SLURS = ["transu", "neekerit", "nigger", "neekeripoika", "neekeri", "neekerin", "mamujen", "matujen", "mamu", "matu", "rättipää", "rättipäät", "hurri", "karvakäsi", "karvakäden", "karvakäsien", "kumihuuli", "kumihuulien", "kumihuulet", "kanukki", "kanukit", "japsi", "jutku", "jutkut", "jutkujen", "jutkuista", "jutkuille", "polakki", "polakit", "polakkien", "lakupekka", "lakupekat", "lakupekkojen", "niggers", "rullahuuli", "ryssä", "ryssät", "mokkakikkeli", "mokkakikkelit", "inkkari", "inkkarit", "japsit", "hurrit", "kehari", "keharit", "kehareiden", "vinosilmä", "vinosilmät", "vinosilmien", "vinosilmäinen", "yön Timo", "yöntimo"]
 SLUR_RE = re.compile(r'\b(%s)\b' % '|'.join(re.escape(s) for s in SLURS), re.IGNORECASE)
 EMAIL_RE = re.compile(r'\S+@\S+\.\w+')
-LINE_NICK_RE = re.compile(r'^\d\d:\d\d <@?([^>]+)>', re.M)
+LINE_NICK_RE = re.compile(r'^\d\d:\d\d\s+(?:<[ @+%]?([^>]+)>|\* (\S+))', re.M)
 
 SCHEMA = {
     'type': 'object',
@@ -93,7 +98,7 @@ SCHEMA = {
 }
 
 SYSTEM = """You are Portsari, the doorman of the Finnish IRC channel #pulina. You never talk with anyone.
-You read a stretch of the channel log, act on rule breaks the way a fair doorman would, and report to the operators.
+You read the channel log, act on rule breaks the way a fair doorman would, and report to the operators.
 
 The channel is strict on purpose. Its owner keeps it free of drug talk, racism, harassment and drunk rambling,
 because channels full of that make people anxious. At the same time it is a channel of regulars who have known
@@ -112,13 +117,19 @@ then a kick, then a knockout (kick + 5 minute ban), then a permanent ban. Strike
   drug bragging, spam, or drunk or incoherent rambling, trolling or provoking that goes on
 - act false: a single borderline line, a joke that only might be off, someone in crisis (they need help, not a warning),
   and anything an operator would rather handle by talking
-Lines marked "[Portsari acted on this line]" were already handled: act on that person again only if they go on.
+Lines listed under "Already handled" were acted on by Portsari's word list: act on that person again only if they go on.
 
 message is shown on the channel, as the warning or as the kick reason: Finnish, calm and factual, under 100 characters,
 with the rule number, for example "Rasismi ei käy (sääntö 15)" or "Rauhoitu ja pidä jutut selkeinä (sääntö 11)".
 Never quote slurs. reason is for the operators only: Finnish, under 100 characters.
+Write proper Finnish with ä and ö.
 
 Judge only the lines after the marker "--- NEW LINES ---". Earlier lines are context, already judged.
+Log lines look like "21:51 < nick> text": @ before the nick marks an operator, + a voiced user, "* nick" an action,
+and "-!-" lines are joins, quits and mode changes.
+You can read the full channel logs with Read, Grep and Glob: daily logs %s/pul-YYYY-MM-DD.log (since 2016)
+and monthly logs %s/pulina-YYYY-MM.log (since 2008). Look back when it helps you judge, for example
+earlier today, or whether someone has done the same before. Look up what you need; do not read whole years.
 Group lines that belong to the same incident into one report. Give the time of its first line.
 kummitus and the network's bots are off limits: never report them or act on them. Their lines are context only.
 Operators (marked with @ in the log) are off limits: never report them or act on them. Their lines are context only.
@@ -130,9 +141,58 @@ RULES:
 
 
 rules_cache = {'text': None, 'at': 0}
-lines = deque(maxlen=CONTEXT_LINES)
-state = {'new': 0, 'last_alert': 0}
+state = {'last_alert': 0}
 unbans = []
+progress_lock = threading.Lock()
+
+
+def day_log(day):
+    return os.path.join(DAY_LOGS, 'pul-%s.log' % day)
+
+
+def read_lines(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding='utf-8', errors='replace') as f:
+        return f.read().splitlines()
+
+
+def load_progress():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def save_progress(progress):
+    with open(STATE_FILE, 'w') as f:
+        json.dump(progress, f)
+
+
+def pending(progress, today):
+    """Lines not judged yet since the saved position, also across midnight. Returns (context, new, next progress)."""
+    if not progress:
+        # First run starts from now, not from the start of the day
+        return [], [], {'day': today, 'line': len(read_lines(day_log(today))), 'handled': []}
+
+    done = read_lines(day_log(progress['day']))
+    context, new = done[:progress['line']][-CONTEXT_LINES:], done[progress['line']:]
+    if progress['day'] == today:
+        return context, new, {'day': today, 'line': len(done), 'handled': progress.get('handled', [])}
+
+    # ponytail: after a gap of more than a day only the last saved day and today are judged
+    fresh = read_lines(day_log(today))
+    return context, new + fresh, {'day': today, 'line': len(fresh), 'handled': []}
+
+
+def note_handled(clock, nick):
+    """Tells the next Claude run that the word list already acted on this line."""
+    with progress_lock:
+        progress = load_progress()
+        if progress and progress['day'] == date.today().isoformat():
+            progress.setdefault('handled', []).append('%s %s' % (clock, nick))
+            save_progress(progress)
 
 
 def load_strikes():
@@ -187,19 +247,24 @@ def fetch_rules():
     return rules_cache['text']
 
 
-def build_input(chunk, new):
-    earlier, fresh = chunk[:len(chunk) - new], chunk[len(chunk) - new:]
-    return 'Earlier lines (context):\n%s\n\n--- NEW LINES ---\n%s\n' % ('\n'.join(earlier) or '(none)', '\n'.join(fresh))
+def build_input(context, new, handled):
+    text = 'Earlier lines (context):\n%s\n\n--- NEW LINES ---\n%s\n' % ('\n'.join(context) or '(none)', '\n'.join(new))
+    if handled:
+        text += '\nAlready handled by the word list: %s\n' % ', '.join(handled)
+    return text
 
 
-def judge(chunk, new, rules):
-    cmd = [CLAUDE, '-p', '--model', MODEL, '--effort', EFFORT, '--tools', '', '--strict-mcp-config',
+def judge(context, new, handled, rules):
+    # dontAsk denies every tool use not allowed here: only reading the two log folders
+    allowed = ['%s(/%s/**)' % (tool, folder) for tool in ('Read', 'Grep', 'Glob') for folder in READABLE]
+    cmd = [CLAUDE, '-p', '--model', MODEL, '--effort', EFFORT, '--tools', 'Read,Grep,Glob',
+           '--permission-mode', 'dontAsk', '--allowedTools', *allowed, '--strict-mcp-config',
            '--setting-sources', '', '--no-session-persistence', '--output-format', 'json',
-           '--json-schema', json.dumps(SCHEMA), '--system-prompt', SYSTEM % rules]
+           '--json-schema', json.dumps(SCHEMA), '--system-prompt', SYSTEM % (DAY_LOGS, MONTH_LOGS, rules)]
     env = dict(os.environ, HOME=CLAUDE_HOME)
-    os.makedirs(CLAUDE_HOME, exist_ok=True)
-    done = subprocess.run(cmd, input=build_input(chunk, new), capture_output=True, text=True,
-                          timeout=CLAUDE_TIMEOUT, env=env, cwd=CLAUDE_HOME)
+    os.makedirs(CLAUDE_WORK, exist_ok=True)
+    done = subprocess.run(cmd, input=build_input(context, new, handled), capture_output=True, encoding='utf-8',
+                          timeout=CLAUDE_TIMEOUT, env=env, cwd=CLAUDE_WORK)
     result = json.loads(done.stdout)
     if result.get('is_error') or 'structured_output' not in result:
         raise RuntimeError('claude failed: %s' % (result.get('result') or done.stderr)[:300])
@@ -318,17 +383,11 @@ def collect(bot, trigger):
     if trigger.sender.lower() != CHANNEL or trigger.nick == bot.nick:
         return
 
-    clock = datetime.now().strftime('%H:%M')
-    chan = bot.channels.get(CHANNEL)
-    mark = '@' if chan and chan.is_op(trigger.nick) else ''
-    line = '%s <%s%s> %s' % (clock, mark, trigger.nick, trigger.plain)
-    state['new'] = min(state['new'] + 1, CONTEXT_LINES)
-
-    if mark or is_bot(bot, str(trigger.nick)) or is_op(bot, trigger.nick) or not SLUR_RE.search(trigger.plain):
-        lines.append(line)
+    if is_bot(bot, str(trigger.nick)) or is_op(bot, trigger.nick) or not SLUR_RE.search(trigger.plain):
         return
 
-    lines.append(line + ACTED_MARK)
+    clock = datetime.now().strftime('%H:%M')
+    note_handled(clock, str(trigger.nick))
     critical_alert(clock, [str(trigger.nick)])
     step, failed = act(bot, str(trigger.nick), SLUR_REASON)
     reason = 'slur listalta' if not failed else 'slur listalta. Ei tehty: %s' % failed
@@ -342,25 +401,35 @@ def lift_bans(bot):
         bot.write(('MODE', CHANNEL, '-b', item[1]))
 
 
+def spoke_in(new):
+    return {a or b for a, b in LINE_NICK_RE.findall('\n'.join(new))}
+
+
 @sopel.plugin.interval(JUDGE_SECONDS)
 def patrol(bot):
-    if not state['new']:
-        return
-
-    chunk, new = list(lines), state['new']
-    state['new'] = 0
-    rules = fetch_rules()
+    with progress_lock:
+        progress = load_progress()
+    context, new, following = pending(progress, date.today().isoformat())
+    rules = fetch_rules() if new else None
     if not rules:
+        if not progress or progress['day'] != following['day']:
+            with progress_lock:
+                save_progress(following)
         return
 
     try:
-        incidents = judge(chunk, new, rules)
+        incidents = judge(context, new, following['handled'], rules)
     except Exception as e:
-        # ponytail: a failed stretch is skipped, not retried; the next run still sees it as context
+        # ponytail: a failed run is retried from the same line next time; stays stuck if Claude keeps failing
         LOGGER.error('[PORTSARI] Judging failed: %s' % e)
         return
 
-    spoke = set(LINE_NICK_RE.findall('\n'.join(chunk[-new:])))
+    with progress_lock:
+        latest = load_progress() or following
+        following['handled'] = latest.get('handled', []) if latest.get('day') == following['day'] else []
+        save_progress(following)
+
+    spoke = spoke_in(new)
     acted = set()
     for incident in incidents:
         handle(bot, incident, spoke, acted)
@@ -368,8 +437,9 @@ def patrol(bot):
 
 if __name__ == '__main__':
     assert number_rules('<p>a</p><ol><li>x</li><li>y</li></ol>') == 'a\n1. x\n2. y'
-    assert build_input(['1', '2', '3'], 1) == 'Earlier lines (context):\n1\n2\n\n--- NEW LINES ---\n3\n'
-    assert build_input(['1'], 1).startswith('Earlier lines (context):\n(none)')
+    assert build_input(['1', '2'], ['3'], []) == 'Earlier lines (context):\n1\n2\n\n--- NEW LINES ---\n3\n'
+    assert build_input([], ['1'], ['21:51 x']).endswith('Already handled by the word list: 21:51 x\n')
+    assert spoke_in(['21:51 < hiippari> x', '21:52 <@oppi> y', '21:53  * kaveri hymyilee', '21:54 -!- z has joined']) == {'hiippari', 'oppi', 'kaveri'}
     assert SLUR_RE.search('neekeri :D') and SLUR_RE.search('NEEKERI') and not SLUR_RE.search('n-sanat ei kuulu tänne')
     assert not SLUR_RE.search('Mattu tuli') and not SLUR_RE.search('maturiteetti')
     assert clean('mail x@y.fi\nnow') == 'mail [poistettu] now'
@@ -377,11 +447,19 @@ if __name__ == '__main__':
     assert format_report('21:51', WARN, ['hiippari'], [15], 'n-sana') == '21:51 varoitus hiippari (sääntö 15): n-sana'
     assert format_report('21:45', NONE, ['a', 'b'], [], 'sekoilua') == '21:45 huomio a, b: sekoilua'
     assert format_alert('21:51', ['hiippari', 'kaveri']) == 'Tsekkaa pulina, sekavaa menoa klo 21:51 nimimerkkien hiippari, kaveri toimesta'
-    assert LINE_NICK_RE.findall('21:51 <hiippari> x\n21:52 <@oppi> y') == ['hiippari', 'oppi']
 
     import tempfile
     from types import SimpleNamespace
     STRIKES_FILE = os.path.join(tempfile.mkdtemp(), 'strikes.json')
+
+    DAY_LOGS = tempfile.mkdtemp()
+    for day, rows in (('2026-11-12', ['a', 'b', 'c']), ('2026-11-13', ['d', 'e'])):
+        with open(day_log(day), 'w') as f:
+            f.write('\n'.join(rows) + '\n')
+    assert pending(None, '2026-11-13') == ([], [], {'day': '2026-11-13', 'line': 2, 'handled': []})
+    assert pending({'day': '2026-11-12', 'line': 1}, '2026-11-13') == (['a'], ['b', 'c', 'd', 'e'], {'day': '2026-11-13', 'line': 2, 'handled': []})
+    assert pending({'day': '2026-11-13', 'line': 1, 'handled': ['x']}, '2026-11-13') == (['d'], ['e'], {'day': '2026-11-13', 'line': 2, 'handled': ['x']})
+    assert pending({'day': '2026-11-13', 'line': 2}, '2026-11-13')[1] == []
 
     class FakeChan:
         privileges = {}

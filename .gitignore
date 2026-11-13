@@ -5,3 +5,4 @@ logs/
 __pycache__/
 strikes.json
 *.pid
+state.json
