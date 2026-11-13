@@ -6,3 +6,5 @@ __pycache__/
 strikes.json
 *.pid
 state.json
+notes.log
+actions.log
