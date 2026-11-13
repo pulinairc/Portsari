@@ -44,7 +44,7 @@ UNBAN_CHECK_SECONDS = 30
 KNOCKOUT_SECONDS = 300  # The rules: knockout = kick + 5 min ban
 CONTEXT_LINES = 150
 ALERT_GAP = 900
-REASON_MAX = 120
+REASON_MAX = 120  # Warnings and kick reasons on the channel stay one short line
 BARK_URL = os.getenv('PORTSARI_BARK_URL')  # https://bark.example/<device key>, optional
 BARK_SOUND = os.getenv('PORTSARI_BARK_SOUND', 'bloom')  # A Bark built-in sound or the name of one uploaded in the app
 BARK_VOLUME = os.getenv('PORTSARI_BARK_VOLUME', '3')  # Critical alert volume, 0-10 in Bark
@@ -56,7 +56,11 @@ NOTES_FILE = os.path.expanduser('~/portsari/notes.log')  # Private observations 
 ACTIONS_FILE = os.path.expanduser('~/portsari/actions.log')  # Every report sent to the ops
 OWNER = 'rolle'  # Gets the private notes
 SLUR_CHECK_DELAY = 20  # Seconds before an early check, so irssi has written the line to the day log
-NOTE_MAX = 200
+# An IRC line is 512 bytes with the sender's address in front, the same limit Lobby keeps (core/src/irc.rs).
+# Sopel's say() measures that per recipient and splits longer text between words, so a private message
+# is never cut: it goes out as more lines. TEXT_MAX only stops a runaway answer from flooding.
+TEXT_MAX = 1000
+MESSAGE_PARTS = 4
 NOTE_REPEAT_SECONDS = 3600  # A second note about the same people within this is dropped
 SENT_LINES = 40  # How many of today's sent notes and reports Claude sees, so it does not repeat them
 STRIKE_DAYS = 30
@@ -325,13 +329,18 @@ def judge(context, new, rules, sent=()):
 
 
 def clean(text, limit=REASON_MAX):
-    """Model text: one line, no addresses, short."""
-    return EMAIL_RE.sub('[poistettu]', ' '.join(text.split()))[:limit]
+    """Model text: one line, no addresses, and when too long cut between words with an ellipsis."""
+    text = EMAIL_RE.sub('[poistettu]', ' '.join(text.split()))
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    head = head.rsplit(' ', 1)[0] if ' ' in head else head[:limit - 1]
+    return head.rstrip() + '…'
 
 
 def format_report(clock, action, nicks, rules, reason):
     rule_text = (' (sääntö %s)' % ', '.join(str(r) for r in rules)) if rules else ''
-    return '%s %s %s%s: %s' % (clock, ACTION_NAMES[action], ', '.join(nicks), rule_text, clean(reason))
+    return '%s %s %s%s: %s' % (clock, ACTION_NAMES[action], ', '.join(nicks), rule_text, clean(reason, TEXT_MAX))
 
 
 def format_alert(clock, nicks):
@@ -377,12 +386,12 @@ def is_op(bot, nick):
 def tell_ops(bot, text):
     append_line(ACTIONS_FILE, text)
     for op in channel_ops(bot):
-        bot.say(text, op)
+        bot.say(text, op, max_messages=MESSAGE_PARTS)
 
 
 def format_note(note):
     nicks = ' (%s)' % ', '.join(note['nicks']) if note['nicks'] else ''
-    return 'Muistiinpano %s%s: %s' % (note['time'], nicks, clean(note['note'], NOTE_MAX))
+    return 'Muistiinpano %s%s: %s' % (note['time'], nicks, clean(note['note'], TEXT_MAX))
 
 
 def tell_owner(bot, note):
@@ -395,7 +404,7 @@ def tell_owner(bot, note):
     noted[key] = time.time()
     text = format_note(note)
     append_line(NOTES_FILE, text)
-    bot.say(text, OWNER)
+    bot.say(text, OWNER, max_messages=MESSAGE_PARTS)
 
 
 def act(bot, nick, message):
@@ -521,7 +530,10 @@ if __name__ == '__main__':
                  'Pakistan', 'chinkapin', 'Scunthorpe', 'klo 14.88', 'hurri', 'mann', 'kello 14:8'):
         assert not SLUR_RE.search(miss), miss
     assert clean('mail x@y.fi\nnow') == 'mail [poistettu] now'
-    assert len(clean('a' * 300)) == REASON_MAX and len(clean('a' * 300, NOTE_MAX)) == NOTE_MAX
+    assert len(clean('a' * 300)) == REASON_MAX
+    long_note = ' '.join(['harmittomia'] * 30)
+    assert clean(long_note) == ' '.join(['harmittomia'] * 10) + '…' and len(clean(long_note)) <= REASON_MAX
+    assert clean(long_note, TEXT_MAX) == long_note
     assert format_report('21:51', KNOCKOUT, ['hiippari'], [15], 'n-sana') == '21:51 knockout hiippari (sääntö 15): n-sana'
     assert format_report('21:51', WARN, ['hiippari'], [15], 'n-sana') == '21:51 varoitus hiippari (sääntö 15): n-sana'
     assert format_report('21:45', NONE, ['a', 'b'], [], 'sekoilua') == '21:45 huomio a, b: sekoilua'
@@ -555,7 +567,7 @@ if __name__ == '__main__':
         nick = 'Portsari'
         channels = {CHANNEL: FakeChan()}
         said, done = [], []
-        def say(self, text, target):
+        def say(self, text, target, max_messages=1):
             self.said.append((target, text))
         def kick(self, nick, channel, text):
             self.done.append(('kick', nick, text))

@@ -1,3 +1,7 @@
+### 1.1.2: 2026-11-13
+
+* Fix long messages cut in the middle
+
 ### 1.1.1: 2026-11-13
 
 * Fix repeating the same notes every round
