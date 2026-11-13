@@ -580,8 +580,8 @@ if __name__ == '__main__':
             pass
 
     threading.Timer = FakeTimer
-    collect(fake, SimpleNamespace(sender=CHANNEL, nick='hiippari', plain='olet neekeri :D'))
-    collect(fake, SimpleNamespace(sender=CHANNEL, nick='oppi', plain='olet neekeri :D'))
-    collect(fake, SimpleNamespace(sender=CHANNEL, nick='hiippari', plain='hyvää huomenta'))
+    collect(fake, SimpleNamespace(is_privmsg=False, sender=CHANNEL, nick='hiippari', plain='olet neekeri :D'))
+    collect(fake, SimpleNamespace(is_privmsg=False, sender=CHANNEL, nick='oppi', plain='olet neekeri :D'))
+    collect(fake, SimpleNamespace(is_privmsg=False, sender=CHANNEL, nick='hiippari', plain='hyvää huomenta'))
     assert started == [(SLUR_CHECK_DELAY, patrol, (fake,))], started
     print('Portsari self-check ok')
