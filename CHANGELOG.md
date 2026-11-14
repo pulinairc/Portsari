@@ -1,3 +1,7 @@
+### 1.2.1: 2026-11-14
+
+* Fix notes about kummitus's intended jokes
+
 ### 1.2.0: 2026-11-13
 
 * Add mustikkasoppa as a verified note reader
