@@ -1,3 +1,7 @@
+### 1.3.0: 2026-11-14
+
+* Add prompt suggestions for kummitus
+
 ### 1.2.1: 2026-11-14
 
 * Fix notes about kummitus's intended jokes
