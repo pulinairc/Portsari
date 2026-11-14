@@ -32,6 +32,7 @@ RULES_TTL = 24 * 3600
 CLAUDE = os.path.expanduser('~/.local/bin/claude')
 CLAUDE_HOME = os.path.expanduser('~/portsari/claude-home')  # Empty: no CLAUDE.md, memory, settings or MCP servers
 CLAUDE_WORK = os.path.join(CLAUDE_HOME, 'work')  # Empty working folder, so nothing is readable by default
+LOG_MOUNT = os.path.expanduser('~/pulina.fi')  # sshfs mount of the website, where irssi writes the logs
 DAY_LOGS = os.path.expanduser('~/pulina.fi/pulina-days')  # pul-YYYY-MM-DD.log since 2016, written live by irssi
 MONTH_LOGS = os.path.expanduser('~/pulina.fi/pul')  # pulina-YYYY-MM.log since 2008
 READABLE = (DAY_LOGS, MONTH_LOGS)
@@ -528,7 +529,16 @@ def patrol(bot):
         progress_lock.release()
 
 
+def logs_ready():
+    """The full logs are there only while the website is mounted; an empty mountpoint would look like a quiet day."""
+    return os.path.ismount(LOG_MOUNT) and os.path.isdir(DAY_LOGS) and os.path.isdir(MONTH_LOGS)
+
+
 def run_check(bot):
+    if not logs_ready():
+        # Progress stays where it was, so the lines are judged once the logs are back
+        LOGGER.error('[PORTSARI] Channel logs not mounted at %s, skipping this round' % LOG_MOUNT)
+        return
     progress = load_progress()
     context, new, following = pending(progress, date.today().isoformat())
     rules = fetch_rules() if new else None
@@ -582,6 +592,8 @@ if __name__ == '__main__':
     ACTIONS_FILE = os.path.join(tempfile.mkdtemp(), 'actions.log')
 
     DAY_LOGS = tempfile.mkdtemp()
+    LOG_MOUNT = DAY_LOGS
+    assert not logs_ready()  # a plain folder is not the mounted website
     for day, rows in (('2026-11-12', ['a', 'b', 'c']), ('2026-11-13', ['d', 'e'])):
         with open(day_log(day), 'w') as f:
             f.write('\n'.join(rows) + '\n')
