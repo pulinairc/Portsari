@@ -4,6 +4,8 @@ The doorman of #pulina. It judges the channel against [the rules](https://www.pu
 
 ```
 #pulina ──> Portsari (Sopel, botit.pulina.fi)
+             ├─ JOIN: Madeleine spam bot (nick, ident and address pattern, never spoken since 2008) ──> kick
+             │        anyone else, no strike, channel not +m ──> voice
              ├─ slur and hate-slogan list ── hit ──> an early Claude check of the context (the word alone never decides)
              ├─ every 10 min, the lines of the day log not judged yet (position saved in state.json, so restarts lose nothing):
              │     rules page + new lines ──> claude -p (reads only the channel logs since 2008, empty home, fixed JSON answer)
@@ -12,6 +14,8 @@ The doorman of #pulina. It judges the channel against [the rules](https://www.pu
              │     notes ──> private message to the verified readers + notes.log, no alert, no action, never about ops
              └─ private messages to Portsari: never read
 ```
+
+The spam check matched 150 bot visits and no real person in the 39 777 joins since 2024. It needs the speaker list (`speakers.json`, built once from the monthly logs and kept up to date) and kicks a host only once, so a mistake mends itself on the next join.
 
 Ops and half-ops are off limits: Portsari never judges, reports, notes or kicks them. It never acts on bots either, and needs op itself to act. Every report to the ops is also kept in `actions.log`. Claude's text reaches the channel only as the warning or kick reason: one line, at most 120 characters, email addresses removed.
 

@@ -54,6 +54,7 @@ BARK_SOUND_URL = os.getenv('PORTSARI_BARK_SOUND_URL')  # A .caf the phone downlo
 STRIKES_FILE = os.path.expanduser('~/portsari/strikes.json')
 STATE_FILE = os.path.expanduser('~/portsari/state.json')  # How far the day log has been judged
 NOTES_FILE = os.path.expanduser('~/portsari/notes.log')  # Private observations for the owner
+SPEAKERS_FILE = os.path.expanduser('~/portsari/speakers.json')  # Every nick that has ever said a line on the channel
 ACTIONS_FILE = os.path.expanduser('~/portsari/actions.log')  # Every report sent to the ops
 KUMMITUS_MEMORY = os.path.expanduser('~/.sopel/memory.json')  # kummitus's standing instructions from its users
 KUMMITUS_CODE = os.path.expanduser('~/.sopel/modules/aibot.py')  # kummitus's system prompts, read-only for Claude
@@ -106,6 +107,15 @@ SLUR_PATTERNS = [
 SLUR_RE = re.compile(r'\b(?:%s)\b' % '|'.join(SLUR_PATTERNS), re.IGNORECASE)
 EMAIL_RE = re.compile(r'\S+@\S+\.\w+')
 LINE_NICK_RE = re.compile(r'^\d\d:\d\d\s+(?:<[ @+%]?([^>]+)>|\* (\S+))', re.M)
+
+# The "Madeleine" spam bot: joins and posts one English "leave my number" line the same second. Nick is a random
+# adjective + animal + first name cut to 15 characters (gladlimpetAnall), the ident is the start of the nick with
+# no identd, the address a bare IP. Since 2024 this matched 150 bot visits in 39 777 joins and no real person; the
+# history check keeps out regulars with long lowercase nicks.
+SPAM_NICK_RE = re.compile(r'^[a-z]{6,}[A-Z]?[a-z]*$')
+RAW_IP_RE = re.compile(r'^(?:\d{1,3}\.){3}\d{1,3}$|^[0-9a-fA-F:]+:[0-9a-fA-F:]*$')
+SPEAKER_RE = re.compile(rb'^\d\d:\d\d\s+(?:<[ @+%]?([^>\s]+)>|\* (\S+))', re.M)
+SPAM_KICK = 'Roskapostibotti'
 
 SCHEMA = {
     'type': 'object',
@@ -207,6 +217,9 @@ rules_cache = {'text': None, 'at': 0}
 state = {'last_alert': 0}
 unbans = []
 noted = {}  # Nicks of a note -> when the last one about them was sent
+speakers = {'nicks': None, 'dirty': False}  # Lowercase nicks that have spoken; None until loaded
+speakers_lock = threading.Lock()
+spam_kicked = set()  # Hosts kicked as spam bots: a second join from the same host is let in, so a mistake mends itself
 progress_lock = threading.Lock()
 
 
@@ -292,6 +305,57 @@ def record_strike(key, level, now):
             json.dump(strikes, f)
     except OSError as e:
         LOGGER.error('[PORTSARI] Saving strikes failed: %s' % e)
+
+
+def load_speakers():
+    """Every nick that has spoken on the channel since 2008, from the cache or, the first time, the monthly logs."""
+    if not speakers_lock.acquire(blocking=False):
+        return
+    try:
+        if speakers['nicks'] is None:
+            build_speakers()
+    finally:
+        speakers_lock.release()
+
+
+def build_speakers():
+    try:
+        with open(SPEAKERS_FILE) as f:
+            speakers['nicks'] = set(json.load(f))
+        return
+    except (OSError, ValueError):
+        pass
+    if not logs_ready():
+        LOGGER.error('[PORTSARI] Channel logs not mounted, spam check waits for the speaker list')
+        return
+    found = set()
+    for name in sorted(os.listdir(MONTH_LOGS)):
+        with open(os.path.join(MONTH_LOGS, name), 'rb') as f:
+            found.update((a or b).decode('utf-8', 'replace').lower() for a, b in SPEAKER_RE.findall(f.read()))
+    speakers['nicks'] = found
+    save_speakers()
+    LOGGER.info('[PORTSARI] Speaker list built: %d nicks' % len(found))
+
+
+def save_speakers():
+    try:
+        with open(SPEAKERS_FILE, 'w') as f:
+            json.dump(sorted(speakers['nicks']), f)
+        speakers['dirty'] = False
+    except OSError as e:
+        LOGGER.error('[PORTSARI] Saving speakers failed: %s' % e)
+
+
+def has_spoken(nick):
+    """None while the list is not loaded, so nobody is kicked on a guess."""
+    return None if speakers['nicks'] is None else nick.lower() in speakers['nicks']
+
+
+def spam_bot(nick, user, host, spoken):
+    ident = (user or '').lstrip('~')
+    return bool(spoken is False and (user or '').startswith('~') and RAW_IP_RE.match(host or '')
+                and 13 <= len(nick) <= 15 and SPAM_NICK_RE.match(nick)
+                and len(ident) >= 8 and nick.lower().startswith(ident.lower()))
 
 
 def number_rules(rendered):
@@ -494,17 +558,45 @@ def handle(bot, incident, spoke, acted):
         tell_ops(bot, format_report(incident['time'], step, [nick], incident['rules'], reason))
 
 
+@sopel.plugin.event('JOIN')
+def doorway(bot, trigger):
+    """Kicks a spam bot the moment it joins and gives everyone else a voice."""
+    nick, host = str(trigger.nick), trigger.host or ''
+    chan = bot.channels.get(CHANNEL)
+    if trigger.sender.lower() != CHANNEL or nick == bot.nick or not chan or not chan.is_op(bot.nick) or is_bot(bot, nick):
+        return
+
+    if spam_bot(nick, trigger.user, host, has_spoken(nick)) and host.lower() not in spam_kicked:
+        spam_kicked.add(host.lower())
+        bot.kick(nick, CHANNEL, SPAM_KICK)
+        tell_ops(bot, format_report(time.strftime('%H:%M'), KICK, [nick], [],
+                                    'roskapostibotin tunnusmerkit (%s@%s), ei aiempia rivejä kanavalla' % (trigger.user, host)))
+        return
+
+    # Under +m the ops decide who talks, and a strike means the doorman has already had words with them
+    if not chan.modes.get('m') and not is_op(bot, nick) and next_level(host.lower() or nick.lower(), time.time()) == 0:
+        bot.write(('MODE', CHANNEL, '+v', nick))
+
+
 @sopel.plugin.rule('.*')
 @sopel.plugin.require_chanmsg
 def collect(bot, trigger):
     if trigger.sender.lower() != CHANNEL or trigger.nick == bot.nick:
         return
 
+    if speakers['nicks'] is not None and str(trigger.nick).lower() not in speakers['nicks']:
+        speakers['nicks'].add(str(trigger.nick).lower())
+        speakers['dirty'] = True
+
     if is_bot(bot, str(trigger.nick)) or is_op(bot, trigger.nick) or not SLUR_RE.search(trigger.plain):
         return
 
     # Claude judges the word in its context right away instead of waiting for the next round
     threading.Timer(SLUR_CHECK_DELAY, patrol, args=(bot,)).start()
+
+
+def setup(bot):
+    threading.Thread(target=load_speakers, daemon=True).start()
 
 
 @sopel.plugin.interval(UNBAN_CHECK_SECONDS)
@@ -535,6 +627,10 @@ def logs_ready():
 
 
 def run_check(bot):
+    if speakers['nicks'] is None:
+        load_speakers()
+    elif speakers['dirty']:
+        save_speakers()
     if not logs_ready():
         # Progress stays where it was, so the lines are judged once the logs are back
         LOGGER.error('[PORTSARI] Channel logs not mounted at %s, skipping this round' % LOG_MOUNT)
@@ -556,6 +652,10 @@ def run_check(bot):
     save_progress(following)
 
     spoke = spoke_in(new)
+    if speakers['nicks'] is not None and not {n.lower() for n in spoke} <= speakers['nicks']:
+        # Also covers lines said while Portsari was away
+        speakers['nicks'].update(n.lower() for n in spoke)
+        save_speakers()
     acted = set()
     for incident in incidents:
         handle(bot, incident, spoke, acted)
@@ -684,4 +784,37 @@ if __name__ == '__main__':
     collect(fake, SimpleNamespace(is_privmsg=False, sender=CHANNEL, nick='oppi', plain='olet neekeri :D'))
     collect(fake, SimpleNamespace(is_privmsg=False, sender=CHANNEL, nick='hiippari', plain='hyvää huomenta'))
     assert started == [(SLUR_CHECK_DELAY, patrol, (fake,))], started
+    # Madeleine bots from the logs are caught, regulars and look-alikes are not
+    assert spam_bot('gladlimpetAnall', '~gladlimpe', '195.80.150.113', False)
+    assert spam_bot('breakablegibbon', '~breakable', '195.210.124.5', False)
+    assert spam_bot('deafbatMarlene', '~deafbatMa', '91.233.0.21', False)
+    assert not spam_bot('gladlimpetAnall', '~gladlimpe', '195.80.150.113', True)   # has spoken before
+    assert not spam_bot('gladlimpetAnall', '~gladlimpe', '195.80.150.113', None)   # list not loaded yet
+    assert not spam_bot('gladlimpetAnall', 'gladlimpe', '195.80.150.113', False)   # identd answers
+    assert not spam_bot('gladlimpetAnall', '~gladlimpe', 'dsl-195.example.fi', False)  # has a hostname
+    assert not spam_bot('Millatestaa', '~Millatest', '89.190.24.118', False)      # Pulina-app tester
+    assert not spam_bot('cristianixus', '~cristiani', '84.232.150.70', False)     # 12 characters
+    assert not spam_bot('Carmen13', '~DjjeqPhO', '185.203.126.37', False)         # silent bots are left alone
+    assert not spam_bot('maunokoivistotk', '~zzzzzzzz', '1.2.3.4', False)         # ident is not the nick
+    assert has_spoken('kuka') is None
+    speakers['nicks'] = {'maunokoivistotk'}
+    assert has_spoken('MaunoKoivistotk') and has_spoken('uusi') is False
+
+    FakeChan.modes = {}
+    FakeChan.users['gladlimpetAnall'] = SimpleNamespace(host='195.80.150.113')
+    fake.done.clear()
+    join = lambda nick, user, host: doorway(fake, SimpleNamespace(sender=CHANNEL, nick=nick, user=user, host=host))
+    join('gladlimpetAnall', '~gladlimpe', '195.80.150.113')
+    assert fake.done == [('kick', 'gladlimpetAnall', SPAM_KICK)], fake.done
+    join('gladlimpetAnall', '~gladlimpe', '195.80.150.113')                # same host again: let in and voiced
+    assert fake.done[1:] == [('MODE', CHANNEL, '+v', 'gladlimpetAnall')], fake.done
+    fake.done.clear()
+    join('Millatestaa', '~Millatest', '89.190.24.118')
+    join('oppi', 'oppi', 'x')                                               # ops are not voiced
+    join('kummitus_', 'rolle', 'botit.pulina.fi')                           # nor our bots
+    join('hiippari', '~hiippari', 'koti.example.fi')                        # nor someone with a strike
+    assert fake.done == [('MODE', CHANNEL, '+v', 'Millatestaa')], fake.done
+    FakeChan.modes = {'m': True}
+    join('uusi', '~uusi', 'jossain.example')
+    assert fake.done == [('MODE', CHANNEL, '+v', 'Millatestaa')], fake.done  # under +m the ops decide
     print('Portsari self-check ok')

@@ -1,3 +1,8 @@
+### 1.4.0: 2026-11-15
+
+* Add join-time kick for Madeleine spam bots
+* Add voice for everyone who joins
+
 ### 1.3.0: 2026-11-14
 
 * Add prompt suggestions for kummitus
