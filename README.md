@@ -5,7 +5,7 @@ The doorman of #pulina. It judges the channel against [the rules](https://www.pu
 ```
 #pulina ──> Portsari (Sopel, botit.pulina.fi)
              ├─ JOIN: Madeleine spam bot (nick, ident and address pattern, never spoken since 2008) ──> kick
-             ├─ JOIN: girl photo spam bot (address in 95.70.0.0/16) ──> kick
+             ├─ JOIN: girl photo spam bot (95.70.0.0/16, no identd, never spoken) ──> kick
              │        anyone else, no strike, channel not +m ──> voice
              ├─ slur and hate-slogan list ── hit ──> an early Claude check of the context (the word alone never decides)
              ├─ every 10 min, the lines of the day log not judged yet (position saved in state.json, so restarts lose nothing):
