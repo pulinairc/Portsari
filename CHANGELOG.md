@@ -1,3 +1,7 @@
+### 1.5.0: 2026-11-17
+
+* Add join-time kick for girl photo spam bots
+
 ### 1.4.0: 2026-11-15
 
 * Add join-time kick for Madeleine spam bots

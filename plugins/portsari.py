@@ -8,6 +8,7 @@ only as a short, cleaned warning or kick reason.
 """
 
 import html
+import ipaddress
 import json
 import os
 import re
@@ -116,6 +117,9 @@ SPAM_NICK_RE = re.compile(r'^[a-z]{6,}[A-Z]?[a-z]*$')
 RAW_IP_RE = re.compile(r'^(?:\d{1,3}\.){3}\d{1,3}$|^[0-9a-fA-F:]+:[0-9a-fA-F:]*$')
 SPEAKER_RE = re.compile(rb'^\d\d:\d\d\s+(?:<[ @+%]?([^>\s]+)>|\* (\S+))', re.M)
 SPAM_KICK = 'Roskapostibotti'
+# The "girl photo" spam bot (GirL24, Natasa25F, SheJessica): every join from this Turkish range since 2016, 11 in all,
+# was one of them posting a photo link. Nick and ident change, the range does not, and it has spoken before.
+SPAM_NETS = (ipaddress.ip_network('95.70.0.0/16'),)
 
 SCHEMA = {
     'type': 'object',
@@ -352,10 +356,19 @@ def has_spoken(nick):
 
 
 def spam_bot(nick, user, host, spoken):
+    """Why the joiner is a spam bot, or '' when it is not."""
+    try:
+        if any(ipaddress.ip_address(host) in net for net in SPAM_NETS):
+            return 'roskapostibotin osoite (%s@%s)' % (user, host)
+    except ValueError:
+        pass
+
     ident = (user or '').lstrip('~')
-    return bool(spoken is False and (user or '').startswith('~') and RAW_IP_RE.match(host or '')
-                and 13 <= len(nick) <= 15 and SPAM_NICK_RE.match(nick)
-                and len(ident) >= 8 and nick.lower().startswith(ident.lower()))
+    if (spoken is False and (user or '').startswith('~') and RAW_IP_RE.match(host or '')
+            and 13 <= len(nick) <= 15 and SPAM_NICK_RE.match(nick)
+            and len(ident) >= 8 and nick.lower().startswith(ident.lower())):
+        return 'roskapostibotin tunnusmerkit (%s@%s), ei aiempia rivejä kanavalla' % (user, host)
+    return ''
 
 
 def number_rules(rendered):
@@ -566,11 +579,11 @@ def doorway(bot, trigger):
     if trigger.sender.lower() != CHANNEL or nick == bot.nick or not chan or not chan.is_op(bot.nick) or is_bot(bot, nick):
         return
 
-    if spam_bot(nick, trigger.user, host, has_spoken(nick)) and host.lower() not in spam_kicked:
+    reason = spam_bot(nick, trigger.user, host, has_spoken(nick))
+    if reason and host.lower() not in spam_kicked:
         spam_kicked.add(host.lower())
         bot.kick(nick, CHANNEL, SPAM_KICK)
-        tell_ops(bot, format_report(time.strftime('%H:%M'), KICK, [nick], [],
-                                    'roskapostibotin tunnusmerkit (%s@%s), ei aiempia rivejä kanavalla' % (trigger.user, host)))
+        tell_ops(bot, format_report(time.strftime('%H:%M'), KICK, [nick], [], reason))
         return
 
     # Under +m the ops decide who talks, and a strike means the doorman has already had words with them
@@ -796,6 +809,9 @@ if __name__ == '__main__':
     assert not spam_bot('cristianixus', '~cristiani', '84.232.150.70', False)     # 12 characters
     assert not spam_bot('Carmen13', '~DjjeqPhO', '185.203.126.37', False)         # silent bots are left alone
     assert not spam_bot('maunokoivistotk', '~zzzzzzzz', '1.2.3.4', False)         # ident is not the nick
+    assert spam_bot('SheJessica', '~chat', '95.70.128.156', True)                  # girl photo bot, spoken or not
+    assert spam_bot('GirL24', '~ilanekle', '95.70.245.120', None)
+    assert not spam_bot('SheJessica', '~chat', '95.71.128.156', False)             # outside the range
     assert has_spoken('kuka') is None
     speakers['nicks'] = {'maunokoivistotk'}
     assert has_spoken('MaunoKoivistotk') and has_spoken('uusi') is False
