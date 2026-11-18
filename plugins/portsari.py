@@ -175,7 +175,8 @@ Report only what an operator should know about:
   flooding, spam
 
 You decide only whether to act. Portsari then escalates by itself, per person: first a warning on the channel,
-then a kick, then a knockout (kick + 5 minute ban), then a permanent ban. Strikes are forgotten after 30 days.
+then a kick, then a knockout (kick + 5 minute ban), then a permanent ban. Slurs skip the warning and start at the kick.
+Strikes are forgotten after 30 days.
 - act true: a real rule break someone should be told about, such as slurs, racism, hate speech, harassment, doxxing,
   drug bragging, spam, or drunk or incoherent rambling, trolling or provoking that goes on
 - act false: a single borderline line, a joke that only might be off, someone in crisis (they need help, not a warning),
@@ -303,8 +304,12 @@ def next_level(key, now):
     return min(last['level'] + 1, len(LADDER) - 1)
 
 
-def record_strike(key, level, now):
-    strikes[key] = {'level': level, 'at': now}
+def record_strike(key, level, now, rejoin=''):
+    strikes[key] = {'level': level, 'at': now, 'rejoin': rejoin}
+    save_strikes()
+
+
+def save_strikes():
     try:
         with open(STRIKES_FILE, 'w') as f:
             json.dump(strikes, f)
@@ -525,8 +530,8 @@ def tell_owner(bot, note):
             bot.say(text, nick, max_messages=MESSAGE_PARTS)
 
 
-def act(bot, nick, message):
-    """Takes the next ladder step on one nick. Returns (step, why not)."""
+def act(bot, nick, message, floor=0):
+    """Takes the next ladder step on one nick, at least LADDER[floor]. Returns (step, why not)."""
     chan = bot.channels.get(CHANNEL)
     user = chan.users.get(bot.make_identifier(nick)) if chan else None
     if not user:
@@ -536,7 +541,7 @@ def act(bot, nick, message):
 
     now = time.time()
     key = (user.host or nick).lower()
-    level = next_level(key, now)
+    level = max(next_level(key, now), floor)
     step = LADDER[level]
     if step != WARN and not chan.is_op(bot.nick):
         return NONE, 'Portsarilla ei ole oppeja, %s jäi tekemättä' % ACTION_NAMES[step]
@@ -550,11 +555,15 @@ def act(bot, nick, message):
             if step == KNOCKOUT:
                 unbans.append((now + KNOCKOUT_SECONDS, mask))
         bot.kick(nick, CHANNEL, clean(message))
-    record_strike(key, level, now)
+    # A slur kick skips the warning, so it is said when they come back
+    rejoin = ''
+    if floor and step != BAN:
+        rejoin = '%s Seuraavaksi %s.' % (clean(message), ACTION_NAMES[LADDER[level + 1]])
+    record_strike(key, level, now, rejoin)
     return step, None
 
 
-def handle(bot, incident, spoke, acted):
+def handle(bot, incident, spoke, acted, slurred=()):
     """Acts on one judged incident and tells the ops what happened. One step per nick per run."""
     nicks = [n for n in incident['nicks'] if not is_op(bot, n) and not is_bot(bot, n)]
     if not nicks:
@@ -570,7 +579,8 @@ def handle(bot, incident, spoke, acted):
     for nick in nicks:
         if nick in acted:
             continue
-        step, failed = act(bot, nick, incident['message']) if nick in spoke else (NONE, 'ei puhunut tässä jaksossa')
+        floor = LADDER.index(KICK) if incident['severity'] == HIGH and nick in slurred else 0
+        step, failed = act(bot, nick, incident['message'], floor) if nick in spoke else (NONE, 'ei puhunut tässä jaksossa')
         acted.add(nick)
         reason = incident['reason'] if not failed else '%s. Ei tehty: %s' % (incident['reason'], failed)
         tell_ops(bot, format_report(incident['time'], step, [nick], incident['rules'], reason))
@@ -591,8 +601,14 @@ def doorway(bot, trigger):
         tell_ops(bot, format_report(time.strftime('%H:%M'), KICK, [nick], [], reason))
         return
 
+    key = host.lower() or nick.lower()
+    if strikes.get(key, {}).get('rejoin'):
+        bot.say('%s: %s' % (nick, strikes[key]['rejoin']), CHANNEL)
+        strikes[key]['rejoin'] = ''
+        save_strikes()
+
     # Under +m the ops decide who talks, and a strike means the doorman has already had words with them
-    if not chan.modes.get('m') and not is_op(bot, nick) and next_level(host.lower() or nick.lower(), time.time()) == 0:
+    if not chan.modes.get('m') and not is_op(bot, nick) and next_level(key, time.time()) == 0:
         bot.write(('MODE', CHANNEL, '+v', nick))
 
 
@@ -626,6 +642,11 @@ def lift_bans(bot):
 
 def spoke_in(new):
     return {a or b for a, b in LINE_NICK_RE.findall('\n'.join(new))}
+
+
+def slurred_in(new):
+    """Nicks whose own words in these lines hit SLUR_RE."""
+    return {m.group(1) or m.group(2) for m in map(LINE_NICK_RE.match, new) if m and SLUR_RE.search(m.string[m.end():])}
 
 
 @sopel.plugin.interval(JUDGE_SECONDS)
@@ -674,9 +695,9 @@ def run_check(bot):
         # Also covers lines said while Portsari was away
         speakers['nicks'].update(n.lower() for n in spoke)
         save_speakers()
-    acted = set()
+    acted, slurred = set(), slurred_in(new)
     for incident in incidents:
-        handle(bot, incident, spoke, acted)
+        handle(bot, incident, spoke, acted, slurred)
     for note in notes[:3]:
         tell_owner(bot, note)
 
@@ -840,4 +861,24 @@ if __name__ == '__main__':
     FakeChan.modes = {'m': True}
     join('uusi', '~uusi', 'jossain.example')
     assert fake.done == [('MODE', CHANNEL, '+v', 'Millatestaa')], fake.done  # under +m the ops decide
+
+    # A slur starts at the kick, and the warning waits for the rejoin
+    assert slurred_in(['22:00 < rasisti> olet neekeri', '22:00 < neekeri69> moi', '22:01 -!- x has joined']) == {'rasisti'}
+    BARK_URL = ''
+    FakeChan.modes = {}
+    FakeChan.users['rasisti'] = SimpleNamespace(host='rasisti.example')
+    fake.said.clear()
+    fake.done.clear()
+    slur = {'severity': HIGH, 'nicks': ['rasisti'], 'time': '22:00', 'rules': [15], 'act': True,
+            'message': 'Rasismi ei käy (sääntö 15)', 'reason': 'n-sana'}
+    handle(fake, slur, {'rasisti'}, set(), {'rasisti'})
+    assert fake.done == [('kick', 'rasisti', 'Rasismi ei käy (sääntö 15)')] and fake.said == [], (fake.done, fake.said)
+    join('rasisti', '~rasisti', 'rasisti.example')
+    join('rasisti', '~rasisti', 'rasisti.example')
+    assert fake.said == [(CHANNEL, 'rasisti: Rasismi ei käy (sääntö 15) Seuraavaksi knockout.')], fake.said
+    handle(fake, slur, {'rasisti'}, set(), {'rasisti'})
+    assert strikes['rasisti.example']['level'] == LADDER.index(KNOCKOUT) and strikes['rasisti.example']['rejoin'].endswith('banni.')
+    FakeChan.users['kaveri2'] = SimpleNamespace(host='kaveri2.example')
+    handle(fake, dict(slur, nicks=['kaveri2'], severity=MID), {'kaveri2'}, set(), {'kaveri2'})
+    assert fake.said[-1] == (CHANNEL, 'kaveri2: Rasismi ei käy (sääntö 15)'), fake.said  # not high: the usual warning
     print('Portsari self-check ok')

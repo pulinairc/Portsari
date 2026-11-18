@@ -1,3 +1,7 @@
+### 1.6.0: 2026-11-18
+
+* Change slurs to kick first, warn on rejoin
+
 ### 1.5.0: 2026-11-17
 
 * Add join-time kick for girl photo spam bots
