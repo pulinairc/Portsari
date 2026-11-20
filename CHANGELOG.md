@@ -1,3 +1,8 @@
+### 1.6.1: 2026-11-20
+
+* Change alert text to Claude's own reason
+* Fix short-nick Madeleine bots getting through
+
 ### 1.6.0: 2026-11-18
 
 * Change slurs to kick first, warn on rejoin

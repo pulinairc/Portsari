@@ -7,11 +7,12 @@ The doorman of #pulina. It judges the channel against [the rules](https://www.pu
              ├─ JOIN: Madeleine spam bot (nick, ident and address pattern, never spoken since 2008) ──> kick
              ├─ JOIN: girl photo spam bot (95.70.0.0/16, no identd, never spoken) ──> kick
              │        anyone else, no strike, channel not +m ──> voice
+             ├─ the Madeleine bot's opening line from a nick that has never spoken ──> kick before the rest follows
              ├─ slur and hate-slogan list ── hit ──> an early Claude check of the context (the word alone never decides)
              ├─ every 10 min, the lines of the day log not judged yet (position saved in state.json, so restarts lose nothing):
              │     rules page + new lines ──> claude -p (reads only the channel logs since 2008, empty home, fixed JSON answer)
              │     act or not + Finnish message ──> next step on the ladder, then private message to every op
-             │     high ──> also a critical alert
+             │     high ──> also a critical alert with Claude's reason
              │     notes ──> private message to the verified readers + notes.log, no alert, no action, never about ops
              └─ private messages to Portsari: never read
 ```

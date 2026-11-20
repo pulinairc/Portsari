@@ -117,6 +117,8 @@ SPAM_NICK_RE = re.compile(r'^[a-z]{6,}[A-Z]?[a-z]*$')
 RAW_IP_RE = re.compile(r'^(?:\d{1,3}\.){3}\d{1,3}$|^[0-9a-fA-F:]+:[0-9a-fA-F:]*$')
 SPEAKER_RE = re.compile(rb'^\d\d:\d\d\s+(?:<[ @+%]?([^>\s]+)>|\* (\S+))', re.M)
 SPAM_KICK = 'Roskapostibotti'
+# Its first line, whatever the nick: a joiner who has never spoken and posts it is kicked before the rest follows
+SPAM_LINE_RE = re.compile(r"leave my number here", re.IGNORECASE)
 # The "girl photo" spam bot (GirL24, Natasa25F, SheJessica): every join from this Turkish range since 2016, 11 in all,
 # was one of them posting a photo link. Nick and ident change, the range does not. No identd and a nick that has
 # never spoken keep out any real person from the range.
@@ -375,7 +377,9 @@ def spam_bot(nick, user, host, spoken):
         return 'roskapostibotin osoite (%s@%s), ei aiempia rivejä kanavalla' % (user, host)
 
     ident = (user or '').lstrip('~')
-    if (13 <= len(nick) <= 15 and SPAM_NICK_RE.match(nick)
+    # A short nick has room for the whole capitalised first name (fatviperTheo); regulars' 12-letter nicks have no capital
+    long_enough = 13 <= len(nick) <= 15 or (9 <= len(nick) <= 12 and not nick.islower())
+    if (long_enough and SPAM_NICK_RE.match(nick)
             and len(ident) >= 8 and nick.lower().startswith(ident.lower())):
         return 'roskapostibotin tunnusmerkit (%s@%s), ei aiempia rivejä kanavalla' % (user, host)
     return ''
@@ -618,6 +622,12 @@ def collect(bot, trigger):
     if trigger.sender.lower() != CHANNEL or trigger.nick == bot.nick:
         return
 
+    nick = str(trigger.nick)
+    if SPAM_LINE_RE.search(trigger.plain) and has_spoken(nick) is False and not is_bot(bot, nick) and not is_op(bot, nick):
+        bot.kick(nick, CHANNEL, SPAM_KICK)
+        tell_ops(bot, format_report(time.strftime('%H:%M'), KICK, [nick], [], 'roskapostibotin viesti, ei aiempia rivejä kanavalla'))
+        return
+
     if speakers['nicks'] is not None and str(trigger.nick).lower() not in speakers['nicks']:
         speakers['nicks'].add(str(trigger.nick).lower())
         speakers['dirty'] = True
@@ -823,6 +833,12 @@ if __name__ == '__main__':
     collect(fake, SimpleNamespace(is_privmsg=False, sender=CHANNEL, nick='oppi', plain='olet neekeri :D'))
     collect(fake, SimpleNamespace(is_privmsg=False, sender=CHANNEL, nick='hiippari', plain='hyvää huomenta'))
     assert started == [(SLUR_CHECK_DELAY, patrol, (fake,))], started
+    speakers['nicks'], fake.done[:] = {'hiippari'}, []
+    spam_line = "Hi Guys! It's Madeleine X! Just thought I'd leave my number here"
+    collect(fake, SimpleNamespace(is_privmsg=False, sender=CHANNEL, nick='fatviperTheo', plain=spam_line))
+    collect(fake, SimpleNamespace(is_privmsg=False, sender=CHANNEL, nick='hiippari', plain=spam_line))  # a regular quoting it
+    assert fake.done == [('kick', 'fatviperTheo', SPAM_KICK)] and 'fatvipertheo' not in speakers['nicks'], fake.done
+    speakers['nicks'], fake.done[:] = None, []
     # Madeleine bots from the logs are caught, regulars and look-alikes are not
     assert spam_bot('gladlimpetAnall', '~gladlimpe', '195.80.150.113', False)
     assert spam_bot('breakablegibbon', '~breakable', '195.210.124.5', False)
@@ -832,7 +848,9 @@ if __name__ == '__main__':
     assert not spam_bot('gladlimpetAnall', 'gladlimpe', '195.80.150.113', False)   # identd answers
     assert not spam_bot('gladlimpetAnall', '~gladlimpe', 'dsl-195.example.fi', False)  # has a hostname
     assert not spam_bot('Millatestaa', '~Millatest', '89.190.24.118', False)      # Pulina-app tester
-    assert not spam_bot('cristianixus', '~cristiani', '84.232.150.70', False)     # 12 characters
+    assert not spam_bot('cristianixus', '~cristiani', '84.232.150.70', False)     # 12 characters, no capital
+    assert not spam_bot('avantgardist', '~avantgard', '84.232.150.70', False)     # a regular's 12-letter nick
+    assert spam_bot('fatviperTheo', '~fatviperT', '89.106.14.89', False)          # 12 characters with the name
     assert not spam_bot('Carmen13', '~DjjeqPhO', '185.203.126.37', False)         # silent bots are left alone
     assert not spam_bot('maunokoivistotk', '~zzzzzzzz', '1.2.3.4', False)         # ident is not the nick
     assert spam_bot('SheJessica', '~chat', '95.70.128.156', False)                 # girl photo bot
