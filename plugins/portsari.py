@@ -458,11 +458,11 @@ def format_report(clock, action, nicks, rules, reason):
     return '%s %s %s%s: %s' % (clock, ACTION_NAMES[action], ', '.join(nicks), rule_text, clean(reason, TEXT_MAX))
 
 
-def format_alert(clock, nicks):
-    return 'Tsekkaa pulina, sekavaa menoa klo %s nimimerkkien %s toimesta' % (clock, ', '.join(nicks))
+def format_alert(clock, nicks, reason):
+    return 'Tsekkaa pulina klo %s (%s): %s' % (clock, ', '.join(nicks), clean(reason, TEXT_MAX))
 
 
-def critical_alert(clock, nicks):
+def critical_alert(clock, nicks, reason):
     if not BARK_URL or time.time() - state['last_alert'] < ALERT_GAP:
         return
 
@@ -471,7 +471,7 @@ def critical_alert(clock, nicks):
         params = {'level': 'critical', 'sound': BARK_SOUND, 'volume': BARK_VOLUME}
         if BARK_SOUND_URL:
             params['soundUrl'] = BARK_SOUND_URL
-        requests.get('%s/Portsari/%s' % (BARK_URL, quote(format_alert(clock, nicks))), params=params, timeout=15)
+        requests.get('%s/Portsari/%s' % (BARK_URL, quote(format_alert(clock, nicks, reason))), params=params, timeout=15)
     except Exception as e:
         LOGGER.error('[PORTSARI] Alert failed: %s' % e)
 
@@ -570,7 +570,7 @@ def handle(bot, incident, spoke, acted, slurred=()):
         return
     nicks = [n for n in nicks if n in spoke] or nicks
     if incident['severity'] == HIGH:
-        critical_alert(incident['time'], nicks)
+        critical_alert(incident['time'], nicks, incident['reason'])
 
     if not incident['act'] or not incident['message'].strip():
         tell_ops(bot, format_report(incident['time'], NONE, nicks, incident['rules'], incident['reason']))
@@ -722,7 +722,7 @@ if __name__ == '__main__':
     assert format_report('21:51', KNOCKOUT, ['hiippari'], [15], 'n-sana') == '21:51 knockout hiippari (sääntö 15): n-sana'
     assert format_report('21:51', WARN, ['hiippari'], [15], 'n-sana') == '21:51 varoitus hiippari (sääntö 15): n-sana'
     assert format_report('21:45', NONE, ['a', 'b'], [], 'sekoilua') == '21:45 huomio a, b: sekoilua'
-    assert format_alert('21:51', ['hiippari', 'kaveri']) == 'Tsekkaa pulina, sekavaa menoa klo 21:51 nimimerkkien hiippari, kaveri toimesta'
+    assert format_alert('21:51', ['hiippari', 'kaveri'], 'Rasistinen haukkuminen') == 'Tsekkaa pulina klo 21:51 (hiippari, kaveri): Rasistinen haukkuminen'
 
     import tempfile
     from types import SimpleNamespace
