@@ -1,3 +1,7 @@
+### 1.7.0: 2026-11-20
+
+* Add pattern judging for delusions and war talk
+
 ### 1.6.1: 2026-11-20
 
 * Change alert text to Claude's own reason

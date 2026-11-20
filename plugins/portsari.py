@@ -15,7 +15,7 @@ import re
 import subprocess
 import threading
 import time
-from datetime import date
+from datetime import date, timedelta
 from urllib.parse import quote
 
 import requests
@@ -74,6 +74,8 @@ TEXT_MAX = 1000
 MESSAGE_PARTS = 4
 NOTE_REPEAT_SECONDS = 3600  # A second note about the same people within this is dropped
 SENT_LINES = 40  # How many of today's sent notes and reports Claude sees, so it does not repeat them
+PAST_DAYS = 14  # Earlier notes and reports about the people talking now, so a pattern across days is seen
+PAST_LINES = 20
 STRIKE_DAYS = 30
 
 HIGH = 'high'
@@ -172,20 +174,27 @@ civil criticism of the rules are normal and are NOT rule breaks. When in doubt, 
 
 Report only what an operator should know about:
 - high: slurs or racism, hate speech, sexual harassment, threats, doxxing, bragging about or glorifying illegal drug use,
+  calls to violence or war against a country, a group or a person, agitating against a group of people (rule 20),
   someone who seems to be in a real crisis
-- mid: drunk, high or incoherent rambling that goes on, deliberate provoking or trolling, personal insults aimed at someone,
-  flooding, spam
+- mid: drunk, high or incoherent rambling that goes on, delusional, grandiose or paranoid talk that keeps coming even when
+  sober (secret missions, invasions, being targeted, strange claims nobody knows how to answer; rule 11), deliberate
+  provoking or trolling, personal insults aimed at someone, flooding, spam
 
 You decide only whether to act. Portsari then escalates by itself, per person: first a warning on the channel,
 then a kick, then a knockout (kick + 5 minute ban), then a permanent ban. Slurs skip the warning and start at the kick.
 Strikes are forgotten after 30 days.
 - act true: a real rule break someone should be told about, such as slurs, racism, hate speech, harassment, doxxing,
-  drug bragging, spam, or drunk or incoherent rambling, trolling or provoking that goes on
+  drug bragging, spam, calls to violence or war, or drunk, incoherent or delusional talk, trolling or provoking that goes on
 - act false: a single borderline line, a joke that only might be off, someone in crisis (they need help, not a warning),
   and anything an operator would rather handle by talking
+Judge a person by their pattern, not one line at a time. When someone's new lines are odd, look at what they said in the
+last days with Grep, and read your earlier notes and reports about them that you are given. Bizarre, delusional or
+war-mongering talk that keeps coming over hours or days is a rule break even when each line alone is borderline: act on it,
+calmly. A crisis means someone says they are in danger or want to hurt themselves; strange beliefs alone are not one.
 
 message is shown on the channel, as the warning or as the kick reason: Finnish, calm and factual, under 100 characters,
-with the rule number, for example "Rasismi ei käy (sääntö 15)" or "Rauhoitu ja pidä jutut selkeinä (sääntö 11)".
+with the rule number, for example "Rasismi ei käy (sääntö 15)", "Rauhoitu ja pidä jutut selkeinä (sääntö 11)" or
+"Sotaan tai väkivaltaan ei yllytetä täällä (sääntö 20)".
 Never quote slurs. reason is for the operators only: Finnish, under 100 characters.
 Write proper Finnish with ä and ö.
 
@@ -285,6 +294,16 @@ def sent_today(today):
     for path in (NOTES_FILE, ACTIONS_FILE):
         lines += [line.split(' ', 1)[1] for line in read_lines(path) if line.startswith(today + ' ')]
     return lines[-SENT_LINES:]
+
+
+def said_before(today, nicks):
+    """Notes and reports from the days before today that name someone in nicks."""
+    first = (date.fromisoformat(today) - timedelta(days=PAST_DAYS)).isoformat()
+    names = re.compile(r'\b(?:%s)\b' % '|'.join(map(re.escape, nicks)), re.IGNORECASE) if nicks else None
+    lines = []
+    for path in (NOTES_FILE, ACTIONS_FILE):
+        lines += [line for line in read_lines(path) if first <= line[:10] < today and names and names.search(line)]
+    return sorted(lines)[-PAST_LINES:]
 
 
 def load_strikes():
@@ -418,8 +437,10 @@ def kummitus_instructions():
         return []
 
 
-def build_input(context, new, sent=(), instructions=()):
+def build_input(context, new, sent=(), instructions=(), past=()):
     text = 'Earlier lines (context):\n%s\n\n--- NEW LINES ---\n%s\n' % ('\n'.join(context) or '(none)', '\n'.join(new))
+    if past:
+        text += '\nYour notes and reports from earlier days about the people in the new lines:\n%s\n' % '\n'.join(past)
     if instructions:
         text += '\nkummitus\'s standing instructions, intended behaviour:\n%s\n' % '\n'.join(instructions)
     if sent:
@@ -427,7 +448,7 @@ def build_input(context, new, sent=(), instructions=()):
     return text
 
 
-def judge(context, new, rules, sent=()):
+def judge(context, new, rules, sent=(), past=()):
     # dontAsk denies every tool use not allowed here: only reading the two log folders
     allowed = ['%s(/%s/**)' % (tool, folder) for tool in ('Read', 'Grep', 'Glob') for folder in READABLE]
     allowed += ['%s(/%s)' % (tool, KUMMITUS_CODE) for tool in ('Read', 'Grep')]
@@ -437,7 +458,7 @@ def judge(context, new, rules, sent=()):
            '--json-schema', json.dumps(SCHEMA), '--system-prompt', SYSTEM % (DAY_LOGS, MONTH_LOGS, KUMMITUS_CODE, rules)]
     env = dict(os.environ, HOME=CLAUDE_HOME)
     os.makedirs(CLAUDE_WORK, exist_ok=True)
-    done = subprocess.run(cmd, input=build_input(context, new, sent, kummitus_instructions()),
+    done = subprocess.run(cmd, input=build_input(context, new, sent, kummitus_instructions(), past),
                           capture_output=True, encoding='utf-8',
                           timeout=CLAUDE_TIMEOUT, env=env, cwd=CLAUDE_WORK)
     result = json.loads(done.stdout)
@@ -693,7 +714,8 @@ def run_check(bot):
         return
 
     try:
-        incidents, notes = judge(context, new, rules, sent_today(following['day']))
+        today = following['day']
+        incidents, notes = judge(context, new, rules, sent_today(today), said_before(today, sorted(spoke_in(new))))
     except Exception as e:
         # ponytail: a failed run is retried from the same line next time; stays stuck if Claude keeps failing
         LOGGER.error('[PORTSARI] Judging failed: %s' % e)
@@ -814,6 +836,12 @@ if __name__ == '__main__':
     append_line(ACTIONS_FILE, '02:20 varoitus hiippari (sääntö 15): n-sana')
     with open(NOTES_FILE, 'a', encoding='utf-8') as f:
         f.write('1999-01-01 Muistiinpano vanha\n')
+    with open(ACTIONS_FILE, 'a', encoding='utf-8') as f:
+        f.write('%s 21:39 huomio Sotija (sääntö 11): outoja juttuja\n' % (date.today() - timedelta(days=3)).isoformat())
+        f.write('%s 21:40 huomio kaveri: liian vanha\n' % (date.today() - timedelta(days=PAST_DAYS + 1)).isoformat())
+    assert said_before(today, ['sotija']) == ['%s 21:39 huomio Sotija (sääntö 11): outoja juttuja' % (date.today() - timedelta(days=3)).isoformat()]
+    assert said_before(today, ['kaveri']) == [] and said_before(today, []) == [] and said_before(today, ['sot']) == []
+    assert 'earlier days about the people in the new lines:\nx\n' in build_input([], ['1'], past=['x'])
     assert sent_today(today) == ['Muistiinpano 02:16 (kummitus_): kummitus vastasi englanniksi',
                                  'Muistiinpano 02:17: Tunnelma kiristyy',
                                  'Muistiinpano 02:40 (kaveri): uusi asia',
