@@ -2,15 +2,18 @@
 Description=portsari, #pulina moderation lookout
 After=network-online.target
 Wants=network-online.target
-# The channel logs live on an sshfs mount of the website; never run without them
-RequiresMountsFor=/home/rolle/pulina.fi
+# Never give up retrying
+StartLimitIntervalSec=0
 
 [Service]
 User=rolle
 WorkingDirectory=/home/rolle/portsari
 EnvironmentFile=/home/rolle/portsari/.env
+# The channel logs are an sshfs mount that cron mounts a minute after boot; wait for it instead of failing
+ExecStartPre=/bin/sh -c "until mountpoint -q /home/rolle/pulina.fi; do sleep 5; done"
+TimeoutStartSec=15min
 ExecStart=/home/rolle/.pyenv/versions/sopel-8-env/bin/sopel start -c /home/rolle/portsari/portsari.cfg
-Restart=on-failure
+Restart=always
 RestartSec=10
 
 [Install]
