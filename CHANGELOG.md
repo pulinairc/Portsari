@@ -1,7 +1,7 @@
 ### 1.7.1: 2026-11-23
 
 * Fix Portsari not starting after a reboot
-* Add warnings for English-only talk
+* Add kicks for English talk
 
 ### 1.7.0: 2026-11-20
 

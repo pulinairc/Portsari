@@ -67,6 +67,9 @@ NOTE_READERS = (
     ('mustikkasoppa', 'mustikkaso@pulina.fi'),
 )
 SLUR_CHECK_DELAY = 20  # Seconds before an early check, so irssi has written the line to the day log
+FINNISH_RULE = 3  # "Finnish only" on the rules page: starts at the kick, like slurs
+# Two English function words and no ä or ö start an early check; Claude still decides
+ENGLISH_RE = re.compile(r"\b(?:the|you|are|is|how|what|who|why|where|hello|hey|anyone|here|i'?m|my|this|that|can|does|do|speak|english|to|and|it|of|have|with|for|not|your|we|they|was|going|there|just)\b", re.IGNORECASE)
 # An IRC line is 512 bytes with the sender's address in front, the same limit Lobby keeps (core/src/irc.rs).
 # Sopel's say() measures that per recipient and splits longer text between words, so a private message
 # is never cut: it goes out as more lines. TEXT_MAX only stops a runaway answer from flooding.
@@ -182,11 +185,13 @@ Report only what an operator should know about:
   language instead of Finnish (rule 3: Finnish only)
 
 You decide only whether to act. Portsari then escalates by itself, per person: first a warning on the channel,
-then a kick, then a knockout (kick + 5 minute ban), then a permanent ban. Slurs skip the warning and start at the kick.
+then a kick, then a knockout (kick + 5 minute ban), then a permanent ban. Slurs and rule 3 skip the warning and start
+at the kick.
 Strikes are forgotten after 30 days.
 - act true: a real rule break someone should be told about, such as slurs, racism, hate speech, harassment, doxxing,
   drug bragging, spam, calls to violence or war, or drunk, incoherent or delusional talk, trolling or provoking that goes on,
-  or someone whose lines are mostly in English or another language (rule 3), even when friendly
+  or someone talking in English or another language instead of Finnish (rule 3), even when friendly: one such sentence
+  is enough, do not wait for a pattern
 - act false: a single borderline line, a joke that only might be off, someone in crisis (they need help, not a warning),
   and anything an operator would rather handle by talking. Not rule 3: a regular's English phrase, quote, meme, song or
   title among Finnish talk, or a Finn answering a foreigner once in English
@@ -198,7 +203,7 @@ calmly. A crisis means someone says they are in danger or want to hurt themselve
 message is shown on the channel, as the warning or as the kick reason: Finnish, calm and factual, under 100 characters,
 with the rule number, for example "Rasismi ei käy (sääntö 15)", "Rauhoitu ja pidä jutut selkeinä (sääntö 11)" or
 "Sotaan tai väkivaltaan ei yllytetä täällä (sääntö 20)".
-For rule 3 the person may not read Finnish, so use exactly: "Finnish only, vain suomea (sääntö 3). In English: #antisocial @ irc.zoite.net"
+For rule 3 the person may not read Finnish, so use exactly: "Finnish only, vain suomea (sääntö 3)"
 Never quote slurs. reason is for the operators only: Finnish, under 100 characters.
 Write proper Finnish with ä and ö.
 
@@ -608,7 +613,8 @@ def handle(bot, incident, spoke, acted, slurred=()):
     for nick in nicks:
         if nick in acted:
             continue
-        floor = LADDER.index(KICK) if incident['severity'] == HIGH and nick in slurred else 0
+        skip = (incident['severity'] == HIGH and nick in slurred) or FINNISH_RULE in incident['rules']
+        floor = LADDER.index(KICK) if skip else 0
         step, failed = act(bot, nick, incident['message'], floor) if nick in spoke else (NONE, 'ei puhunut tässä jaksossa')
         acted.add(nick)
         reason = incident['reason'] if not failed else '%s. Ei tehty: %s' % (incident['reason'], failed)
@@ -657,10 +663,10 @@ def collect(bot, trigger):
         speakers['nicks'].add(str(trigger.nick).lower())
         speakers['dirty'] = True
 
-    if is_bot(bot, str(trigger.nick)) or is_op(bot, trigger.nick) or not SLUR_RE.search(trigger.plain):
+    if is_bot(bot, str(trigger.nick)) or is_op(bot, trigger.nick) or not early_check(trigger.plain):
         return
 
-    # Claude judges the word in its context right away instead of waiting for the next round
+    # Claude judges the line in its context right away instead of waiting for the next round
     threading.Timer(SLUR_CHECK_DELAY, patrol, args=(bot,)).start()
 
 
@@ -673,6 +679,14 @@ def lift_bans(bot):
     for item in [u for u in unbans if u[0] <= time.time()]:
         unbans.remove(item)
         bot.write(('MODE', CHANNEL, '-b', item[1]))
+
+
+def looks_english(text):
+    return len(ENGLISH_RE.findall(text)) >= 2 and not re.search('[äöÄÖ]', text)
+
+
+def early_check(text):
+    return bool(SLUR_RE.search(text)) or looks_english(text)
 
 
 def spoke_in(new):
@@ -931,4 +945,12 @@ if __name__ == '__main__':
     FakeChan.users['kaveri2'] = SimpleNamespace(host='kaveri2.example')
     handle(fake, dict(slur, nicks=['kaveri2'], severity=MID), {'kaveri2'}, set(), {'kaveri2'})
     assert fake.said[-1] == (CHANNEL, 'kaveri2: Rasismi ei käy (sääntö 15)'), fake.said  # not high: the usual warning
+    # English starts at the kick too
+    assert looks_english('jalwelagi: how are you ?') and looks_english("I'm okayish. Going to work soon")
+    assert not looks_english('aa ainiin täällä pitää puhua vaan suomea. okie dokie.') and not looks_english('Hi Everyone')
+    FakeChan.users['Tranquil'] = SimpleNamespace(host='tranquil.example')
+    english = {'severity': MID, 'nicks': ['Tranquil'], 'time': '13:02', 'rules': [FINNISH_RULE], 'act': True,
+               'message': 'Finnish only, vain suomea (sääntö 3)', 'reason': 'englantia'}
+    handle(fake, english, {'Tranquil'}, set())
+    assert fake.done[-1] == ('kick', 'Tranquil', 'Finnish only, vain suomea (sääntö 3)'), fake.done
     print('Portsari self-check ok')

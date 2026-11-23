@@ -1,6 +1,6 @@
 # Portsari
 
-The doorman of #pulina. It judges the channel against [the rules](https://www.pulina.fi/saannot), and when it decides a break calls for action, escalates per person: warning, kick, knockout (kick + 5 min ban), then a permanent ban. Slurs skip the warning and start at the kick; the warning is then said when they rejoin, with the next step named. Strikes are kept by host in `strikes.json` and forgotten after 30 days. It also tells every op in a short private message what it did, when and why, and sends private notes about harmful things and bad vibes that are not rule breaks to a short list of readers, each checked by nick and exact ident@host before every message. It never answers anyone.
+The doorman of #pulina. It judges the channel against [the rules](https://www.pulina.fi/saannot), and when it decides a break calls for action, escalates per person: warning, kick, knockout (kick + 5 min ban), then a permanent ban. Slurs and English (rule 3: Finnish only) skip the warning and start at the kick; the warning is then said when they rejoin, with the next step named. Strikes are kept by host in `strikes.json` and forgotten after 30 days. It also tells every op in a short private message what it did, when and why, and sends private notes about harmful things and bad vibes that are not rule breaks to a short list of readers, each checked by nick and exact ident@host before every message. It never answers anyone.
 
 ```
 #pulina ──> Portsari (Sopel, botit.pulina.fi)
@@ -8,7 +8,7 @@ The doorman of #pulina. It judges the channel against [the rules](https://www.pu
              ├─ JOIN: girl photo spam bot (95.70.0.0/16, no identd, never spoken) ──> kick
              │        anyone else, no strike, channel not +m ──> voice
              ├─ the Madeleine bot's opening line from a nick that has never spoken ──> kick before the rest follows
-             ├─ slur and hate-slogan list ── hit ──> an early Claude check of the context (the word alone never decides)
+             ├─ slur and hate-slogan list, or a line that looks English ── hit ──> an early Claude check of the context (the hit alone never decides)
              ├─ every 10 min, the lines of the day log not judged yet (position saved in state.json, so restarts lose nothing):
              │     rules page + new lines + its notes and reports on the speakers from the last 14 days ──> claude -p (reads only the channel logs since 2008, empty home, fixed JSON answer)
              │     act or not + Finnish message ──> next step on the ladder, then private message to every op
