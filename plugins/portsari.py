@@ -56,6 +56,7 @@ STRIKES_FILE = os.path.expanduser('~/portsari/strikes.json')
 STATE_FILE = os.path.expanduser('~/portsari/state.json')  # How far the day log has been judged
 NOTES_FILE = os.path.expanduser('~/portsari/notes.log')  # Private observations for the owner
 SPEAKERS_FILE = os.path.expanduser('~/portsari/speakers.json')  # Every nick that has ever said a line on the channel
+FINNS_FILE = os.path.expanduser('~/portsari/finns.json')  # Nicks that have written Finnish, and the hosts they wrote it from
 ACTIONS_FILE = os.path.expanduser('~/portsari/actions.log')  # Every report sent to the ops
 KUMMITUS_MEMORY = os.path.expanduser('~/.sopel/memory.json')  # kummitus's standing instructions from its users
 KUMMITUS_CODE = os.path.expanduser('~/.sopel/modules/aibot.py')  # kummitus's system prompts, read-only for Claude
@@ -68,6 +69,12 @@ NOTE_READERS = (
 )
 SLUR_CHECK_DELAY = 20  # Seconds before an early check, so irssi has written the line to the day log
 FINNISH_RULE = 3  # "Finnish only" on the rules page: starts at the kick, like slurs
+FINNISH_KICK = 'Finnish only channel'
+FINNISH_WORDS_RE = re.compile(r'\b(?:ja|ei|se|mä|sä|että|kun|mut|mutta|niin|joo|moi|kiitos|tää|oon|mitä|miten|nyt|vaan|jos|'
+                              r'tai|kyllä|onko|oli|olen|ole|sen|sitä|tämä|siis|vielä|hei|eli|myös|vai|kanssa|mikä)\b', re.IGNORECASE)
+JOIN_RE = re.compile(r'^\d\d:\d\d -!- (\S+) \[[^\]@]*@([^\]]+)\] has joined')
+RENAME_RE = re.compile(r'^\d\d:\d\d -!- (\S+) is now known as (\S+)')
+SAID_RE = re.compile(r'^\d\d:\d\d\s+<[ @+%]?([^>\s]+)> (.*)')
 # Two English function words and no ä or ö start an early check; Claude still decides
 ENGLISH_RE = re.compile(r"\b(?:the|you|are|is|how|what|who|why|where|hello|hey|anyone|here|i'?m|my|this|that|can|does|do|speak|english|to|and|it|of|have|with|for|not|your|we|they|was|going|there|just)\b", re.IGNORECASE)
 # An IRC line is 512 bytes with the sender's address in front, the same limit Lobby keeps (core/src/irc.rs).
@@ -191,10 +198,14 @@ Strikes are forgotten after 30 days.
 - act true: a real rule break someone should be told about, such as slurs, racism, hate speech, harassment, doxxing,
   drug bragging, spam, calls to violence or war, or drunk, incoherent or delusional talk, trolling or provoking that goes on,
   or someone talking in English or another language instead of Finnish (rule 3), even when friendly: one such sentence
-  is enough, do not wait for a pattern
+  is enough, do not wait for a pattern. It counts only when the sentence itself is English, the words that carry it
+  ("how are you", "anyone here?"), not English words inside Finnish talk
 - act false: a single borderline line, a joke that only might be off, someone in crisis (they need help, not a warning),
-  and anything an operator would rather handle by talking. Not rule 3: a regular's English phrase, quote, meme, song or
-  title among Finnish talk, or a Finn answering a foreigner once in English
+  and anything an operator would rather handle by talking. Not rule 3: names and titles of films, games, songs, books
+  or bands ("The Last of Us oli hyvä", a bare "The Matrix"), quotes, memes, song lyrics, links, commands, code,
+  nicks, single English words, an English phrase among Finnish talk, or a Finn answering a foreigner in English.
+  When unsure whether it is talk or a title, act false. Portsari also checks itself that the person has never written
+  Finnish on any nick from the same address before it kicks.
 Judge a person by their pattern, not one line at a time. When someone's new lines are odd, look at what they said in the
 last days with Grep, and read your earlier notes and reports about them that you are given. Bizarre, delusional or
 war-mongering talk that keeps coming over hours or days is a rule break even when each line alone is borderline: act on it,
@@ -203,7 +214,7 @@ calmly. A crisis means someone says they are in danger or want to hurt themselve
 message is shown on the channel, as the warning or as the kick reason: Finnish, calm and factual, under 100 characters,
 with the rule number, for example "Rasismi ei käy (sääntö 15)", "Rauhoitu ja pidä jutut selkeinä (sääntö 11)" or
 "Sotaan tai väkivaltaan ei yllytetä täällä (sääntö 20)".
-For rule 3 the person may not read Finnish, so use exactly: "Finnish only, vain suomea (sääntö 3)"
+For rule 3 Portsari writes the kick reason itself.
 Never quote slurs. reason is for the operators only: Finnish, under 100 characters.
 Write proper Finnish with ä and ö.
 
@@ -245,6 +256,8 @@ unbans = []
 noted = {}  # Nicks of a note -> when the last one about them was sent
 speakers = {'nicks': None, 'dirty': False}  # Lowercase nicks that have spoken; None until loaded
 speakers_lock = threading.Lock()
+finns = {'nicks': None, 'hosts': set(), 'dirty': False}  # Lowercase; None until loaded, so nobody is kicked on a guess
+finns_lock = threading.Lock()
 spam_kicked = set()  # Hosts kicked as spam bots: a second join from the same host is let in, so a mistake mends itself
 progress_lock = threading.Lock()
 
@@ -389,6 +402,81 @@ def save_speakers():
 def has_spoken(nick):
     """None while the list is not loaded, so nobody is kicked on a guess."""
     return None if speakers['nicks'] is None else nick.lower() in speakers['nicks']
+
+
+def looks_finnish(text):
+    return bool(re.search('[äöÄÖ]', text)) or len(FINNISH_WORDS_RE.findall(text)) >= 2
+
+
+def load_finns():
+    """Who has written Finnish since 2008, from the cache or, the first time, the monthly logs."""
+    if not finns_lock.acquire(blocking=False):
+        return
+    try:
+        if finns['nicks'] is None:
+            build_finns()
+    finally:
+        finns_lock.release()
+
+
+def build_finns():
+    try:
+        with open(FINNS_FILE) as f:
+            data = json.load(f)
+        finns['hosts'] = set(data['hosts'])
+        finns['nicks'] = set(data['nicks'])
+        return
+    except (OSError, ValueError, KeyError):
+        pass
+    if not logs_ready():
+        LOGGER.error('[PORTSARI] Channel logs not mounted, English kicks wait for the Finnish speaker list')
+        return
+    nicks, hosts, seen = set(), set(), {}  # seen: nick -> host it joined from, carried over nick changes
+    for name in sorted(os.listdir(MONTH_LOGS)):
+        with open(os.path.join(MONTH_LOGS, name), encoding='utf-8', errors='replace') as f:
+            for line in f:
+                said = SAID_RE.match(line)
+                if said:
+                    if looks_finnish(said.group(2)):
+                        nicks.add(said.group(1).lower())
+                        if said.group(1).lower() in seen:
+                            hosts.add(seen[said.group(1).lower()])
+                    continue
+                joined = JOIN_RE.match(line)
+                if joined:
+                    seen[joined.group(1).lower()] = joined.group(2).lower()
+                    continue
+                renamed = RENAME_RE.match(line)
+                if renamed and renamed.group(1).lower() in seen:
+                    seen[renamed.group(2).lower()] = seen.pop(renamed.group(1).lower())
+    finns['hosts'] = hosts
+    finns['nicks'] = nicks
+    save_finns()
+    LOGGER.info('[PORTSARI] Finnish speaker list built: %d nicks, %d hosts' % (len(nicks), len(hosts)))
+
+
+def save_finns():
+    try:
+        with open(FINNS_FILE, 'w') as f:
+            json.dump({'nicks': sorted(finns['nicks']), 'hosts': sorted(finns['hosts'])}, f)
+        finns['dirty'] = False
+    except OSError as e:
+        LOGGER.error('[PORTSARI] Saving Finnish speakers failed: %s' % e)
+
+
+def finnish_reason(nick, host, english):
+    """Why someone may not be kicked for English, or '' when they may."""
+    if nick not in english:
+        return 'ei englanninkielistä lausetta tai kirjoitti myös suomea'
+    if finns['nicks'] is None:
+        return 'suomenpuhujien lista ei ole vielä valmis'
+    if nick.lower() in finns['nicks']:
+        return 'kirjoittanut suomea aiemmin'
+    if host and host.lower() in finns['hosts']:
+        return 'samasta osoitteesta on kirjoitettu suomea'
+    if host and host.lower().endswith('.fi'):
+        return 'suomalainen osoite'
+    return ''
 
 
 def spam_bot(nick, user, host, spoken):
@@ -597,7 +685,7 @@ def act(bot, nick, message, floor=0):
     return step, None
 
 
-def handle(bot, incident, spoke, acted, slurred=()):
+def handle(bot, incident, spoke, acted, slurred=(), english=()):
     """Acts on one judged incident and tells the ops what happened. One step per nick per run."""
     nicks = [n for n in incident['nicks'] if not is_op(bot, n) and not is_bot(bot, n)]
     if not nicks:
@@ -613,9 +701,17 @@ def handle(bot, incident, spoke, acted, slurred=()):
     for nick in nicks:
         if nick in acted:
             continue
-        skip = (incident['severity'] == HIGH and nick in slurred) or FINNISH_RULE in incident['rules']
-        floor = LADDER.index(KICK) if skip else 0
-        step, failed = act(bot, nick, incident['message'], floor) if nick in spoke else (NONE, 'ei puhunut tässä jaksossa')
+        message, floor, failed = incident['message'], 0, None
+        if incident['severity'] == HIGH and nick in slurred:
+            floor = LADDER.index(KICK)
+        if FINNISH_RULE in incident['rules']:
+            chan = bot.channels.get(CHANNEL)
+            user = chan.users.get(bot.make_identifier(nick)) if chan else None
+            message, floor = FINNISH_KICK, LADDER.index(KICK)
+            failed = finnish_reason(nick, user.host if user else None, english) or None
+        if nick not in spoke:
+            failed = 'ei puhunut tässä jaksossa'
+        step, failed = (NONE, failed) if failed else act(bot, nick, message, floor)
         acted.add(nick)
         reason = incident['reason'] if not failed else '%s. Ei tehty: %s' % (incident['reason'], failed)
         tell_ops(bot, format_report(incident['time'], step, [nick], incident['rules'], reason))
@@ -659,6 +755,11 @@ def collect(bot, trigger):
         tell_ops(bot, format_report(time.strftime('%H:%M'), KICK, [nick], [], 'roskapostibotin viesti, ei aiempia rivejä kanavalla'))
         return
 
+    if finns['nicks'] is not None and looks_finnish(trigger.plain):
+        finns['nicks'].add(nick.lower())
+        finns['hosts'].add(str(trigger.host).lower())
+        finns['dirty'] = True
+
     if speakers['nicks'] is not None and str(trigger.nick).lower() not in speakers['nicks']:
         speakers['nicks'].add(str(trigger.nick).lower())
         speakers['dirty'] = True
@@ -672,6 +773,7 @@ def collect(bot, trigger):
 
 def setup(bot):
     threading.Thread(target=load_speakers, daemon=True).start()
+    threading.Thread(target=load_finns, daemon=True).start()
 
 
 @sopel.plugin.interval(UNBAN_CHECK_SECONDS)
@@ -691,6 +793,12 @@ def early_check(text):
 
 def spoke_in(new):
     return {a or b for a, b in LINE_NICK_RE.findall('\n'.join(new))}
+
+
+def english_in(new):
+    """Nicks with an English-looking line and no Finnish one in these lines."""
+    said = [m for m in map(SAID_RE.match, new) if m]
+    return {m.group(1) for m in said if looks_english(m.group(2))} - {m.group(1) for m in said if looks_finnish(m.group(2))}
 
 
 def slurred_in(new):
@@ -719,6 +827,10 @@ def run_check(bot):
         load_speakers()
     elif speakers['dirty']:
         save_speakers()
+    if finns['nicks'] is None:
+        load_finns()
+    elif finns['dirty']:
+        save_finns()
     if not logs_ready():
         # Progress stays where it was, so the lines are judged once the logs are back
         LOGGER.error('[PORTSARI] Channel logs not mounted at %s, skipping this round' % LOG_MOUNT)
@@ -747,7 +859,7 @@ def run_check(bot):
         save_speakers()
     acted, slurred = set(), slurred_in(new)
     for incident in incidents:
-        handle(bot, incident, spoke, acted, slurred)
+        handle(bot, incident, spoke, acted, slurred, english_in(new))
     for note in notes[:3]:
         tell_owner(bot, note)
 
@@ -951,6 +1063,20 @@ if __name__ == '__main__':
     FakeChan.users['Tranquil'] = SimpleNamespace(host='tranquil.example')
     english = {'severity': MID, 'nicks': ['Tranquil'], 'time': '13:02', 'rules': [FINNISH_RULE], 'act': True,
                'message': 'Finnish only, vain suomea (sääntö 3)', 'reason': 'englantia'}
-    handle(fake, english, {'Tranquil'}, set())
-    assert fake.done[-1] == ('kick', 'Tranquil', 'Finnish only, vain suomea (sääntö 3)'), fake.done
+    finns['nicks'], finns['hosts'] = {'zfs'}, {'koti.example.fi', 'finni.example'}
+    handle(fake, english, {'Tranquil'}, set(), english=english_in(['13:02 <+Tranquil> zfs: how are you ?']))
+    assert fake.done[-1] == ('kick', 'Tranquil', FINNISH_KICK), fake.done
+    assert english_in(['13:02 < a> how are you', '13:03 < a> mitä kuuluu', '13:04 < b> The Last of Us oli hyvä']) == set()
+    assert looks_finnish('The Last of Us oli hyvä ja pitkä') and not looks_finnish('how are you doing today')
+    assert finnish_reason('zfs', 'x.example', {'zfs'}) == 'kirjoittanut suomea aiemmin'
+    assert finnish_reason('uusi', 'finni.example', {'uusi'}) == 'samasta osoitteesta on kirjoitettu suomea'
+    assert finnish_reason('uusi', 'dsl.elisa-laajakaista.fi', {'uusi'}) == 'suomalainen osoite'
+    assert finnish_reason('uusi', 'x.example', set()).startswith('ei englanninkielistä')
+    assert finnish_reason('uusi', 'x.example', {'uusi'}) == ''
+    finns['nicks'] = None
+    assert finnish_reason('uusi', 'x.example', {'uusi'}) == 'suomenpuhujien lista ei ole vielä valmis'
+    FakeChan.users['Finni'] = SimpleNamespace(host='finni.example')
+    done = len(fake.done)
+    handle(fake, dict(english, nicks=['Finni']), {'Finni'}, set(), english={'Finni'})
+    assert len(fake.done) == done, fake.done  # list not loaded: nobody is kicked on a guess
     print('Portsari self-check ok')
