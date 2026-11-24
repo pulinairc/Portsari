@@ -98,26 +98,34 @@ BAN = 'ban'
 LADDER = (WARN, KICK, KNOCKOUT, BAN)
 ACTION_NAMES = {NONE: 'huomio', WARN: 'varoitus', KICK: 'potku', KNOCKOUT: 'knockout', BAN: 'banni'}
 
-# A hit only starts an early Claude check of the context, it never acts by itself. Stems catch inflections
-# (neekeri, neekerille, n33keri); short words that are parts of ordinary words are listed as whole forms.
+# A kick word kicks the moment it is said, without asking Claude: only words with no innocent meaning.
+# A check word may be innocent (tattari, Iivana, "a chink in the armour"), so it only starts an early Claude check.
+# Stems catch inflections (neekeri, neekerille, n33keri); short words are listed as whole forms.
 # Sources: Kielitoimisto's sanakirja via uusikielemme.fi's list of Finnish insults, Wikipedia's List of ethnic slurs,
 # ADL's hate symbols database.
-SLUR_PATTERNS = [
+SLUR_KICK_PATTERNS = [
     # Finnish: race and ethnicity
-    r'n+[e3]+k+[e3]+r\w*', r'nekru\w*', r'neekru\w*', r'mutakuono\w*', r'lakupek\w*', r'kumihuul\w*',
-    r'rullahuul\w*', r'mokkakikkel\w*', r'rättipä\w*', r'vinosilm\w*', r'somppu\w*', r'jutku\w*',
-    r'tattar\w*', r'ryss[äa]\w*', r'iivana\w*', r'slobo\w*', r'kanukk\w*',
-    r'(?:mamu|matu)(?:t|n|a|ja|jen|ille|ista|ilta|lle|lla)?',
-    # Finnish: sexuality, gender, disability, misogyny
-    r'hintt\w*', r'transu\w*', r'kehari\w*', r'mongoloid\w*', r'huora\w*', r'lutka\w*',
+    r'n+[e3]+[kg]+[e3]+r\w*', r'nekru\w*', r'neekru\w*', r'mutakuono\w*', r'kumihuul\w*',
+    r'rullahuul\w*', r'mokkakikkel\w*', r'rättipä\w*', r'vinosilm\w*', r'keltanaam\w*', r'punanahk\w*',
+    r'somppu\w*', r'jutku\w*', r'ryss[äa]\w*', r'kamelikusk\w*', r'(?:mamu|matu)(?:t|n|a|ja|jen|ille|ista|ilta|lle|lla)?',
+    # Finnish: sexuality, gender, disability
+    r'hintt\w*', r'homppel\w*', r'transu\w*', r'kehari\w*', r'mongoloid\w*', r'spastikk\w*', r'vammane(?:n|t)?',
     # English
-    r'n+[i1]+gg\w*', r'negro(?:es)?', r'coons?', r'darkies', r'darkie', r'jigaboos?', r'porch ?monkeys?',
-    r'spics?', r'wetbacks?', r'beaners?', r'chinks?', r'gooks?', r'zipperheads?', r'kikes?', r'ragheads?',
-    r'towelheads?', r'pakis?', r'faggots?', r'fags?', r'trann(?:y|ies)', r'retard\w*', r'golliwogs?',
-    # Nazi and white-power slogans and codes
-    r'sieg ?heil', r'heil ?hitler', r'white ?power', r'14 ?/ ?88', r'1488',
+    r'(?:sand ?)?n+[i1]+gg(?:a|ah|as|az|er|ers|ur|uh)', r'n[i1]gg[e3]r\w*', r'darkies', r'darkie', r'jigaboos?',
+    r'porch ?monkeys?', r'jungle ?bunn(?:y|ies)', r'spics?', r'wetbacks?', r'beaners?', r'gooks?', r'zipperheads?',
+    r'kikes?', r'ragheads?', r'towelheads?', r'camel ?jockeys?', r'pakis?', r'pajeets?', r'shitskins?', r'groids?',
+    r'dindus?', r'kaffirs?', r'faggots?', r'trann(?:y|ies)', r'shemales?', r'retard(?:s|ed)?', r'spergs?', r'golliwogs?',
+    # Nazi and white-power slogans
+    r'sieg ?heil', r'heil ?hitler', r'white ?power', r'rahowa', r'gas the jews',
 ]
-SLUR_RE = re.compile(r'\b(?:%s)\b' % '|'.join(SLUR_PATTERNS), re.IGNORECASE)
+SLUR_CHECK_PATTERNS = [
+    r'lakupek\w*', r'tattar\w*', r'iivana\w*', r'slobo\w*', r'kanukk\w*', r'huora\w*', r'lutka\w*',
+    r'negro(?:es)?', r'coons?', r'chinks?', r'chinam[ae]n', r'fags?', r'dykes?', r'wogs?', r'14 ?/ ?88', r'1488',
+]
+SLUR_KICK_RE = re.compile(r'\b(?:%s)\b' % '|'.join(SLUR_KICK_PATTERNS), re.IGNORECASE)
+SLUR_RE = re.compile(r'\b(?:%s)\b' % '|'.join(SLUR_KICK_PATTERNS + SLUR_CHECK_PATTERNS), re.IGNORECASE)
+SLUR_RULE = 15  # "Ei rasismia, kansallissosialismia tai vihapuhetta"
+SLUR_KICK = 'Halventavat nimitykset eivät käy (sääntö %d)' % SLUR_RULE
 EMAIL_RE = re.compile(r'\S+@\S+\.\w+')
 LINE_NICK_RE = re.compile(r'^\d\d:\d\d\s+(?:<[ @+%]?([^>]+)>|\* (\S+))', re.M)
 
@@ -193,7 +201,8 @@ Report only what an operator should know about:
 
 You decide only whether to act. Portsari then escalates by itself, per person: first a warning on the channel,
 then a kick, then a knockout (kick + 5 minute ban), then a permanent ban. Slurs and rule 3 skip the warning and start
-at the kick.
+at the kick. Portsari kicks the clearest slurs by itself the moment they are said, whatever the context: report them,
+but they need no act from you.
 Strikes are forgotten after 30 days.
 - act true: a real rule break someone should be told about, such as slurs, racism, hate speech, harassment, doxxing,
   drug bragging, spam, calls to violence or war, or drunk, incoherent or delusional talk, trolling or provoking that goes on,
@@ -685,7 +694,7 @@ def act(bot, nick, message, floor=0):
     return step, None
 
 
-def handle(bot, incident, spoke, acted, slurred=(), english=()):
+def handle(bot, incident, spoke, acted, slurred=(), english=(), kicked=()):
     """Acts on one judged incident and tells the ops what happened. One step per nick per run."""
     nicks = [n for n in incident['nicks'] if not is_op(bot, n) and not is_bot(bot, n)]
     if not nicks:
@@ -711,6 +720,8 @@ def handle(bot, incident, spoke, acted, slurred=(), english=()):
             failed = finnish_reason(nick, user.host if user else None, english) or None
         if nick not in spoke:
             failed = 'ei puhunut tässä jaksossa'
+        if nick in kicked:
+            failed = 'potkaistiin jo heti sanasta'
         step, failed = (NONE, failed) if failed else act(bot, nick, message, floor)
         acted.add(nick)
         reason = incident['reason'] if not failed else '%s. Ei tehty: %s' % (incident['reason'], failed)
@@ -754,6 +765,11 @@ def collect(bot, trigger):
         bot.kick(nick, CHANNEL, SPAM_KICK)
         tell_ops(bot, format_report(time.strftime('%H:%M'), KICK, [nick], [], 'roskapostibotin viesti, ei aiempia rivejä kanavalla'))
         return
+
+    if SLUR_KICK_RE.search(trigger.plain) and not is_bot(bot, nick) and not is_op(bot, nick):
+        step, failed = act(bot, nick, SLUR_KICK, LADDER.index(KICK))
+        reason = 'halventava nimitys' if not failed else 'halventava nimitys. Ei tehty: %s' % failed
+        tell_ops(bot, format_report(time.strftime('%H:%M'), step, [nick], [SLUR_RULE], reason))
 
     if finns['nicks'] is not None and looks_finnish(trigger.plain):
         finns['nicks'].add(nick.lower())
@@ -801,9 +817,9 @@ def english_in(new):
     return {m.group(1) for m in said if looks_english(m.group(2))} - {m.group(1) for m in said if looks_finnish(m.group(2))}
 
 
-def slurred_in(new):
-    """Nicks whose own words in these lines hit SLUR_RE."""
-    return {m.group(1) or m.group(2) for m in map(LINE_NICK_RE.match, new) if m and SLUR_RE.search(m.string[m.end():])}
+def slurred_in(new, regex=SLUR_RE):
+    """Nicks whose own words in these lines hit regex."""
+    return {m.group(1) or m.group(2) for m in map(LINE_NICK_RE.match, new) if m and regex.search(m.string[m.end():])}
 
 
 @sopel.plugin.interval(JUDGE_SECONDS)
@@ -859,7 +875,8 @@ def run_check(bot):
         save_speakers()
     acted, slurred = set(), slurred_in(new)
     for incident in incidents:
-        handle(bot, incident, spoke, acted, slurred, english_in(new))
+        # ponytail: a kick word said while Portsari was away is left to this round's ladder, not kicked
+        handle(bot, incident, spoke, acted, slurred, english_in(new), slurred_in(new, SLUR_KICK_RE))
     for note in notes[:3]:
         tell_owner(bot, note)
 
@@ -870,11 +887,16 @@ if __name__ == '__main__':
     assert build_input([], ['1'], ['Muistiinpano 04:13 (x): y']).endswith('Already sent today, do not repeat:\nMuistiinpano 04:13 (x): y\n')
     assert "standing instructions, intended behaviour:\nkerro X:lle vääriä vastauksia\n" in build_input([], ['1'], [], ['kerro X:lle vääriä vastauksia'])
     assert spoke_in(['21:51 < hiippari> x', '21:52 <@oppi> y', '21:53  * kaveri hymyilee', '21:54 -!- z has joined']) == {'hiippari', 'oppi', 'kaveri'}
-    for hit in ('neekeri :D', 'NEEKERI', 'neekereille', 'n33keri', 'nekru', 'hintti', 'mamut', 'matujen', 'rättipää',
-                'ryssät', 'nigga', 'niggers', 'faggot', 'sieg heil', 'Heil Hitler', '14/88', 'retarded'):
-        assert SLUR_RE.search(hit), hit
+    for hit in ('neekeri :D', 'NEEKERI', 'neekereille', 'n33keri', 'neegeri', 'nekru', 'hintti', 'homppeli', 'mamut',
+                'matujen', 'rättipää', 'ryssä on arvaamaton', 'ryssät', 'spastikko', 'oot vammane', 'nigga', 'niggers',
+                'sandnigger', 'faggot', 'sieg heil', 'Heil Hitler', 'retarded', 'camel jockey'):
+        assert SLUR_KICK_RE.search(hit), hit
+    for check in ('lakupekka logolla oleva pipo', 'tattari', 'Iivana tuli', 'voi huora', 'a chink in the armour', 'fags', '14/88'):
+        assert SLUR_RE.search(check) and not SLUR_KICK_RE.search(check), check
     for miss in ('n-sanat ei kuulu tänne', 'Mattu tuli', 'maturiteetti', 'matkustan', 'mamuska', 'spice', 'raccoon',
-                 'Pakistan', 'chinkapin', 'Scunthorpe', 'klo 14.88', 'hurri', 'mann', 'kello 14:8'):
+                 'Pakistan', 'chinkapin', 'Scunthorpe', 'klo 14.88', 'hurri', 'mann', 'kello 14:8', 'niggle', 'niggling',
+                 'fire retardant', 'MongoDB', 'vammaispalvelukyydit', 'vammainen', 'nekrologi', 'homo', 'Venäjä',
+                 'rysty', 'spastinen'):
         assert not SLUR_RE.search(miss), miss
     assert clean('mail x@y.fi\nnow') == 'mail [poistettu] now'
     assert len(clean('a' * 300)) == REASON_MAX
@@ -987,10 +1009,15 @@ if __name__ == '__main__':
             pass
 
     threading.Timer = FakeTimer
+    fake.done.clear()
     collect(fake, SimpleNamespace(is_privmsg=False, sender=CHANNEL, nick='hiippari', plain='olet neekeri :D'))
     collect(fake, SimpleNamespace(is_privmsg=False, sender=CHANNEL, nick='oppi', plain='olet neekeri :D'))
     collect(fake, SimpleNamespace(is_privmsg=False, sender=CHANNEL, nick='hiippari', plain='hyvää huomenta'))
     assert started == [(SLUR_CHECK_DELAY, patrol, (fake,))], started
+    assert [d for d in fake.done if d[0] == 'kick'] == [('kick', 'hiippari', SLUR_KICK)], fake.done  # ops are never kicked
+    handle(fake, {'severity': HIGH, 'nicks': ['hiippari'], 'time': '22:00', 'rules': [15], 'act': True,
+                  'message': 'Rasismi ei käy (sääntö 15)', 'reason': 'n-sana'}, {'hiippari'}, set(), kicked={'hiippari'})
+    assert [d for d in fake.done if d[0] == 'kick'] == [('kick', 'hiippari', SLUR_KICK)], fake.done  # not twice
     speakers['nicks'], fake.done[:] = {'hiippari'}, []
     spam_line = "Hi Guys! It's Madeleine X! Just thought I'd leave my number here"
     collect(fake, SimpleNamespace(is_privmsg=False, sender=CHANNEL, nick='fatviperTheo', plain=spam_line))

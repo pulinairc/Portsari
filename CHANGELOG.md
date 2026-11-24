@@ -1,3 +1,7 @@
+### 1.7.2: 2026-11-24
+
+* Kick on slurs instantly, without Claude
+
 ### 1.7.1: 2026-11-23
 
 * Fix Portsari not starting after a reboot
