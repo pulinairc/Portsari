@@ -105,21 +105,34 @@ ACTION_NAMES = {NONE: 'huomio', WARN: 'varoitus', KICK: 'potku', KNOCKOUT: 'knoc
 # ADL's hate symbols database.
 SLUR_KICK_PATTERNS = [
     # Finnish: race and ethnicity
-    r'n+[e3]+[kg]+[e3]+r\w*', r'nekru\w*', r'neekru\w*', r'mutakuono\w*', r'kumihuul\w*',
-    r'rullahuul\w*', r'mokkakikkel\w*', r'rättipä\w*', r'vinosilm\w*', r'keltanaam\w*', r'punanahk\w*',
-    r'somppu\w*', r'jutku\w*', r'ryss[äa]\w*', r'kamelikusk\w*', r'(?:mamu|matu)(?:t|n|a|ja|jen|ille|ista|ilta|lle|lla)?',
+    r'\w*n+[e3]{2,}k+[e3]+r\w*', r'n+[e3]+[kg]+[e3]+r\w*', r'negge\w*', r'\w*n[e3]kru\w*', r'\w*mutakuono\w*',
+    r'mutakep\w*', r'mutiai\w*', r'nokikep\w*', r'lakupell\w*', r'kumihuul\w*', r'rullahuul\w*', r'toppahuul\w*',
+    r'mokkakikkel\w*', r'mokkakorv\w*', r'mokkamun\w*', r'paskanahk\w*', r'sompanssi\w*', r'smugu\w*', r'somppu\w*',
+    r'värivammai\w*', r'värivialli\w*', r'kafferi\w*', r'kamelikusk\w*', r'taatelintallaaj\w*', r'\w*rättipä\w*',
+    r'ähly\w*', r'ählämi\w*', r'karvakä(?:si|de)\w*', r'\w*vinosilm\w*', r'viirusilm\w*',
+    r'keltanaam\w*', r'punanahk\w*', r'kinukki\w*', r'jutku\w*', r'jutsku\w*', r'jutika\w*', r'jutikk\w*',
+    r'ryss[äa]\w*', r'venako\w*', r'venakk\w*', r'varttimann\w*', r'svedupell\w*', r'svedupet\w*',
+    r'(?:mamu|matu)(?:t|n|a|ja|jen|ille|ista|ilta|lle|lla)?', r'mamujun\w*', r'mamupat\w*', r'matupat\w*', r'mamero\w*',
+    r'rotupettur\w*',
     # Finnish: sexuality, gender, disability
-    r'hintt\w*', r'homppel\w*', r'transu\w*', r'kehari\w*', r'mongoloid\w*', r'spastikk\w*', r'vammane(?:n|t)?',
+    r'\w*hintt\w*', r'homppel\w*', r'transu\w*', r'kehari\w*', r'umpihomo\w*', r'viherhomo\w*', r'sivarihomo\w*',
+    r'kanahomo\w*', r'suvakkihuor\w*', r'mongoloid\w*', r'spastikk\w*', r'retardi\w*',
     # English
     r'(?:sand ?)?n+[i1]+gg(?:a|ah|as|az|er|ers|ur|uh)', r'n[i1]gg[e3]r\w*', r'darkies', r'darkie', r'jigaboos?',
     r'porch ?monkeys?', r'jungle ?bunn(?:y|ies)', r'spics?', r'wetbacks?', r'beaners?', r'gooks?', r'zipperheads?',
-    r'kikes?', r'ragheads?', r'towelheads?', r'camel ?jockeys?', r'pakis?', r'pajeets?', r'shitskins?', r'groids?',
+    r'ragheads?', r'towelheads?', r'camel ?jockeys?', r'pakis?', r'pajeets?', r'shitskins?', r'groids?',
     r'dindus?', r'kaffirs?', r'faggots?', r'trann(?:y|ies)', r'shemales?', r'retard(?:s|ed)?', r'spergs?', r'golliwogs?',
     # Nazi and white-power slogans
     r'sieg ?heil', r'heil ?hitler', r'white ?power', r'rahowa', r'gas the jews',
 ]
 SLUR_CHECK_PATTERNS = [
-    r'lakupek\w*', r'tattar\w*', r'iivana\w*', r'slobo\w*', r'kanukk\w*', r'huora\w*', r'lutka\w*',
+    r'kalansilm\w*', r'sekasikiö\w*', r'karvaran\w*', r'kikes?', r'vammane(?:n|t)?', r'vajak\w*',
+    r'lakupek\w*', r'tattar\w*', r'iivana\w*', r'vanja\w*', r'slobo\w*', r'kanukk\w*', r'polakk\w*', r'tšuhna\w*',
+    r'tshuhna\w*', r'inkkar\w*', r'japs\w*', r'mann(?:e|en|et|eja|ejen|eille)', r'hurri\w*', r'koukkunok\w*',
+    r'hevosmie\w*', r'tapola\w*', r'rikastuttaj\w*', r'kuukeri\w*', r'rullis\w*', r'puoliverine\w*', r'suvak\w*',
+    r'haittamaahanmuuttaj\w*', r'maahantunkeutuj\w*', r'turvapaikkashoppail\w*', r'kumivenepakolai\w*',
+    r'huora\w*', r'\w+huora\w*', r'lutka\w*', r'narttu\w*', r'nartu\w*', r'femak\w*', r'feminats\w*', r'homo(?:t|ja|jen|ille|ilta)?',
+    r'lesbo\w*', r'autisti\w*', r'debiil\w*', r'imbesill\w*', r'jälkeenjää\w*', r'inva(?:t|ja|lle)?', r'mieshuor\w*',
     r'negro(?:es)?', r'coons?', r'chinks?', r'chinam[ae]n', r'fags?', r'dykes?', r'wogs?', r'14 ?/ ?88', r'1488',
 ]
 SLUR_KICK_RE = re.compile(r'\b(?:%s)\b' % '|'.join(SLUR_KICK_PATTERNS), re.IGNORECASE)
@@ -888,15 +901,20 @@ if __name__ == '__main__':
     assert "standing instructions, intended behaviour:\nkerro X:lle vääriä vastauksia\n" in build_input([], ['1'], [], ['kerro X:lle vääriä vastauksia'])
     assert spoke_in(['21:51 < hiippari> x', '21:52 <@oppi> y', '21:53  * kaveri hymyilee', '21:54 -!- z has joined']) == {'hiippari', 'oppi', 'kaveri'}
     for hit in ('neekeri :D', 'NEEKERI', 'neekereille', 'n33keri', 'neegeri', 'nekru', 'hintti', 'homppeli', 'mamut',
-                'matujen', 'rättipää', 'ryssä on arvaamaton', 'ryssät', 'spastikko', 'oot vammane', 'nigga', 'niggers',
-                'sandnigger', 'faggot', 'sieg heil', 'Heil Hitler', 'retarded', 'camel jockey'):
+                'matujen', 'rättipää', 'ryssä on arvaamaton', 'ryssät', 'spastikko', 'nigga', 'niggers',
+                'sandnigger', 'faggot', 'sieg heil', 'Heil Hitler', 'retarded', 'camel jockey', 'hiekkaneekeri',
+                'tunturineekerit', 'viherhintti', 'ryssänhuora', 'ähläminä', 'mokkamunat', 'retardi', 'jutsku',
+                'mamupatja', 'kafferit', 'suvakkihuora', 'toppahuuli', 'mutakeppi'):
         assert SLUR_KICK_RE.search(hit), hit
-    for check in ('lakupekka logolla oleva pipo', 'tattari', 'Iivana tuli', 'voi huora', 'a chink in the armour', 'fags', '14/88'):
+    for check in ('kalansilmäkamera', 'oot vammane', 'vajakit', 'sekasikiöksi', 'lakupekka logolla oleva pipo', 'manne', 'hurrit', 'homo', 'autisti', 'inkkari', 'Vanja', 'suvakki', 'tattari', 'Iivana tuli', 'voi huora', 'a chink in the armour', 'fags', '14/88'):
         assert SLUR_RE.search(check) and not SLUR_KICK_RE.search(check), check
     for miss in ('n-sanat ei kuulu tänne', 'Mattu tuli', 'maturiteetti', 'matkustan', 'mamuska', 'spice', 'raccoon',
-                 'Pakistan', 'chinkapin', 'Scunthorpe', 'klo 14.88', 'hurri', 'mann', 'kello 14:8', 'niggle', 'niggling',
-                 'fire retardant', 'MongoDB', 'vammaispalvelukyydit', 'vammainen', 'nekrologi', 'homo', 'Venäjä',
-                 'rysty', 'spastinen'):
+                 'Pakistan', 'chinkapin', 'Scunthorpe', 'klo 14.88', 'mann', 'kello 14:8', 'niggle', 'niggling',
+                 'fire retardant', 'MongoDB', 'vammaispalvelukyydit', 'vammainen', 'nekrologi', 'Venäjä',
+                 'rysty', 'spastinen', 'mannerheim', 'Mannisen', 'laku',
+                 'vajaa', 'homeopatia', 'homogeeninen', 'japani', 'inventaario', 'Manner-Suomi',
+                 'mustikkasoppa', 'kenkkuilu', 'Nekrasov', 'transport', 'kehä', 'pajatso', 'höyryssä',
+                 'kärryssä', 'kanacurryssa', 'kylkimyyryssä', 'nextstoryssa'):
         assert not SLUR_RE.search(miss), miss
     assert clean('mail x@y.fi\nnow') == 'mail [poistettu] now'
     assert len(clean('a' * 300)) == REASON_MAX

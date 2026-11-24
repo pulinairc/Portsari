@@ -1,6 +1,6 @@
 ### 1.7.2: 2026-11-24
 
-* Kick on slurs instantly, without Claude
+* Kick on slurs instantly from a wider list
 
 ### 1.7.1: 2026-11-23
 
