@@ -10,9 +10,13 @@ The doorman of #pulina. It judges the channel against [the rules](https://www.pu
              ├─ the Madeleine bot's opening line from a nick that has never spoken ──> kick before the rest follows
              ├─ kick word (slur, Nazi slogan) ── hit ──> kicked at once, no Claude
              ├─ ambiguous slur word, or a line that looks English ── hit ──> an early Claude check of the context
+             ├─ every minute, if anyone spoke: Haiku reads the new talk ── heating up ──> the full check now (at most every 2 min)
+             ├─ the full check flagged people as heating up ──> the full check again in 2 min, told whom it was watching
              ├─ every 10 min, the lines of the day log not judged yet (position saved in state.json, so restarts lose nothing):
              │     rules page + new lines + its notes and reports on the speakers from the last 14 days ──> claude -p (reads only the channel logs since 2008, empty home, fixed JSON answer)
-             │     act or not + Finnish message ──> next step on the ladder, then private message to every op
+             │     act or not + Finnish message ──> next step on the ladder, one message naming everyone, then private message to every op
+             │     calm ──> a gentle word to everyone involved, no strike, once per 30 min for the same people
+             │     22-07 ──> told the ops are asleep, so it calms or acts itself instead of leaving a note
              │     high ──> also a critical alert with Claude's reason
              │     notes ──> private message to the verified readers + notes.log, no alert, no action, never about ops
              └─ private messages to Portsari: never read

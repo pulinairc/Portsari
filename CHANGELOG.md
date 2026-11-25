@@ -1,3 +1,7 @@
+### 1.8.0: 2026-11-25
+
+* Add fast heat checks, calming and night mode
+
 ### 1.7.2: 2026-11-24
 
 * Kick on slurs instantly from a wider list
