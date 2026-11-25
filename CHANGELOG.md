@@ -1,3 +1,7 @@
+### 1.8.1: 2026-11-26
+
+* Fix notes reading past cases as new
+
 ### 1.8.0: 2026-11-25
 
 * Add fast heat checks, calming and night mode
